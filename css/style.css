@@ -61,7 +61,7 @@ img { max-width: 100%; display: block; }
 
 /* ---------------------------------- Topbar ----------------------------------- */
 .topbar { background: var(--navy); border-top: 4px solid var(--accent); position: sticky; top: 0; z-index: 20; box-shadow: var(--shadow); }
-.topbar__inner { max-width: var(--container); margin: 0 auto; padding: 12px 20px; display: flex; align-items: center; gap: 20px; }
+.topbar__inner { max-width: var(--container); margin: 0 auto; padding: 12px 20px; display: flex; flex-wrap: wrap; align-items: center; gap: 12px 20px; }
 .brand { display: flex; align-items: center; gap: 10px; color: #fff; flex-shrink: 0; }
 .brand__mark { background: var(--accent); color: var(--accent-ink); font-family: var(--font-mono); font-weight: 600; font-size: 0.8rem; padding: 5px 8px; border-radius: 5px; letter-spacing: 0.03em; }
 .brand__name { font-family: var(--font-display); font-weight: 600; font-size: 1.02rem; white-space: nowrap; }
@@ -73,6 +73,7 @@ img { max-width: 100%; display: block; }
 .navlink { display: flex; align-items: center; gap: 6px; color: #fff; font-size: 0.88rem; font-weight: 500; padding: 8px 10px; border-radius: var(--radius-sm); }
 .navlink:hover { background: rgba(255,255,255,0.1); }
 .user-badge { display: flex; align-items: center; gap: 8px; background: rgba(255,255,255,0.08); border-radius: 999px; padding: 4px 6px 4px 4px; }
+.user-badge .icon-btn { width: auto; padding: 0 12px; gap: 6px; font-size: 0.78rem; font-weight: 600; }
 .user-avatar { width: 30px; height: 30px; border-radius: 50%; object-fit: cover; background: rgba(255,255,255,0.2); }
 .user-badge__text { display: flex; flex-direction: column; line-height: 1.15; color: #fff; }
 .user-badge__text strong { font-size: 0.82rem; }
@@ -92,6 +93,10 @@ img { max-width: 100%; display: block; }
 .btn-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .icon-btn { background: transparent; border: 1px solid var(--border); border-radius: var(--radius-sm); width: 36px; height: 36px; display: inline-flex; align-items: center; justify-content: center; color: var(--ink-soft); }
 .icon-btn:hover { border-color: var(--navy); color: var(--navy); }
+/* topbar/user-badge sit on the dark navy background — icon-btn's default colors
+   (dark charcoal on a faint dark border) are invisible there. Override to light. */
+.topbar .icon-btn { color: rgba(255,255,255,0.85); border-color: rgba(255,255,255,0.35); }
+.topbar .icon-btn:hover { color: var(--accent); border-color: var(--accent); }
 .icon { width: 19px; height: 19px; }
 .link { color: var(--navy); font-weight: 600; text-decoration: underline; cursor: pointer; }
 
@@ -159,11 +164,17 @@ img { max-width: 100%; display: block; }
 .dropzone { border: 2px dashed var(--border); border-radius: var(--radius); padding: 30px 20px; text-align: center; background: var(--bg-warm); transition: border-color 0.15s ease, background 0.15s ease; margin-top: 18px; }
 .dropzone--drag { border-color: var(--accent); background: #F5F8DD; }
 .dropzone__icon { width: 32px; height: 32px; color: var(--navy); margin: 0 auto 8px; }
-.upload-list { margin-top: 14px; display: flex; flex-direction: column; gap: 6px; text-align: left; max-width: 480px; margin-left: auto; margin-right: auto; }
-.upload-item { display: flex; justify-content: space-between; gap: 10px; font-size: 0.84rem; background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 7px 12px; }
+.upload-list { margin-top: 14px; display: flex; flex-direction: column; gap: 8px; text-align: left; max-width: 480px; margin-left: auto; margin-right: auto; }
+.upload-item { background: var(--surface); border: 1px solid var(--border-soft); border-radius: var(--radius-sm); padding: 8px 12px; }
+.upload-item__top { display: flex; justify-content: space-between; gap: 10px; font-size: 0.84rem; margin-bottom: 6px; }
 .upload-item__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.upload-item__status { font-family: var(--font-mono); font-size: 0.78rem; color: var(--muted); flex-shrink: 0; }
+.upload-item__bar { height: 5px; border-radius: 999px; background: var(--border-soft); overflow: hidden; }
+.upload-item__bar-fill { height: 100%; background: var(--accent); border-radius: 999px; transition: width 0.15s ease; }
 .upload-item--ok .upload-item__status { color: var(--success); }
+.upload-item--ok .upload-item__bar-fill { background: var(--success); }
 .upload-item--fail .upload-item__status { color: var(--danger); }
+.upload-item--fail .upload-item__bar-fill { background: var(--danger); }
 
 /* ---------------------------------- Gallery ---------------------------------- */
 .gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(170px, 1fr)); gap: 14px; margin-top: 10px; }
@@ -238,8 +249,7 @@ input:focus, select:focus { border-color: var(--navy); }
 
 /* ---------------------------------- Responsive ---------------------------------- */
 @media (max-width: 720px) {
-  .topbar__inner { flex-wrap: wrap; }
-  .topbar__search { order: 3; max-width: 100%; flex-basis: 100%; }
+  .topbar__search { order: 3; flex-basis: 100%; }
   .view { padding: 20px 14px 60px; }
 }
 

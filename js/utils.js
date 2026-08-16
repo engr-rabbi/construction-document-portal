@@ -81,3 +81,35 @@ function fileToBase64(file) {
     reader.readAsDataURL(file);
   });
 }
+
+/**
+ * ছবি আপলোডের আগে ব্রাউজারেই (canvas দিয়ে) একটা ছোট থাম্বনেইল (সর্বোচ্চ ~400px, JPEG)
+ * বানিয়ে ফেলে। মূল ফাইল অপরিবর্তিত/পুরো রেজোলিউশনে আপলোড হয় — শুধু গ্যালারি প্রিভিউয়ের
+ * জন্য এই ছোট কপিটা আলাদাভাবে পাঠানো হয়, যাতে গ্যালারি লোড অনেক দ্রুত হয়।
+ * ছবি ছাড়া অন্য ফাইলের (PDF/DOC ইত্যাদি) জন্য null রিটার্ন করে।
+ */
+function makeThumbnail(file, maxDim, quality) {
+  maxDim = maxDim || 420;
+  quality = quality || 0.72;
+  if (!/^image\//.test(file.type)) return Promise.resolve(null);
+
+  return new Promise(function (resolve) {
+    var url = URL.createObjectURL(file);
+    var img = new Image();
+    img.onload = function () {
+      var w = img.width, h = img.height;
+      var scale = Math.min(1, maxDim / Math.max(w, h));
+      var cw = Math.max(1, Math.round(w * scale));
+      var ch = Math.max(1, Math.round(h * scale));
+      var canvas = document.createElement('canvas');
+      canvas.width = cw; canvas.height = ch;
+      var ctx = canvas.getContext('2d');
+      ctx.drawImage(img, 0, 0, cw, ch);
+      URL.revokeObjectURL(url);
+      var dataUrl = canvas.toDataURL('image/jpeg', quality);
+      resolve(dataUrl.split(',')[1]);
+    };
+    img.onerror = function () { URL.revokeObjectURL(url); resolve(null); };
+    img.src = url;
+  });
+}

@@ -54,7 +54,7 @@ function renderUserSlot() {
       '<div class="user-badge">' +
       '  <img src="' + (user.picture || '') + '" class="user-avatar" onerror="this.style.display=\'none\'">' +
       '  <div class="user-badge__text"><strong>' + escapeHtml(user.name) + '</strong><small>' + roleLabel + '</small></div>' +
-      '  <button class="icon-btn" id="logout-btn" title="Sign out">' + icon('logout') + '</button>' +
+      '  <button class="icon-btn" id="logout-btn" title="Sign out">' + icon('logout') + '<span>Sign out</span></button>' +
       '</div>';
     document.getElementById('logout-btn').addEventListener('click', Auth.logout);
   }
@@ -453,20 +453,39 @@ function handleFiles(fileList, projectId, category) {
   var list = document.getElementById('upload-list');
   var files = Array.prototype.slice.call(fileList);
   files.forEach(function (file) {
-    var row = el('<div class="upload-item"><span class="upload-item__name">' + escapeHtml(file.name) + '</span><span class="upload-item__status">⏳ Uploading...</span></div>');
+    var row = el(
+      '<div class="upload-item">' +
+      '  <div class="upload-item__top"><span class="upload-item__name">' + escapeHtml(file.name) + '</span><span class="upload-item__status">প্রস্তুত হচ্ছে...</span></div>' +
+      '  <div class="upload-item__bar"><div class="upload-item__bar-fill" style="width:0%"></div></div>' +
+      '</div>'
+    );
     list.appendChild(row);
-    fileToBase64(file).then(function (base64) {
-      return Api.post('uploadFile', {
-        projectId: projectId, category: category, fileName: file.name, mimeType: file.type || 'application/octet-stream', fileData: base64
+    var statusEl = row.querySelector('.upload-item__status');
+    var barEl = row.querySelector('.upload-item__bar-fill');
+
+    Promise.all([fileToBase64(file), makeThumbnail(file)])
+      .then(function (res) {
+        var base64 = res[0], thumbBase64 = res[1];
+        statusEl.textContent = '0%';
+        return Api.postWithProgress('uploadFile', {
+          projectId: projectId, category: category, fileName: file.name,
+          mimeType: file.type || 'application/octet-stream', fileData: base64,
+          thumbnailData: thumbBase64 || undefined
+        }, function (pct) {
+          barEl.style.width = pct + '%';
+          statusEl.textContent = pct + '%';
+        });
+      })
+      .then(function () {
+        statusEl.innerHTML = '✅ Uploaded';
+        barEl.style.width = '100%';
+        row.classList.add('upload-item--ok');
+        refreshFileAreaIfPresent(projectId, category);
+      })
+      .catch(function (err) {
+        statusEl.innerHTML = '❌ ' + escapeHtml(err.message);
+        row.classList.add('upload-item--fail');
       });
-    }).then(function () {
-      row.querySelector('.upload-item__status').innerHTML = '✅ Uploaded';
-      row.classList.add('upload-item--ok');
-      refreshFileAreaIfPresent(projectId, category);
-    }).catch(function (err) {
-      row.querySelector('.upload-item__status').innerHTML = '❌ ' + escapeHtml(err.message);
-      row.classList.add('upload-item--fail');
-    });
   });
 }
 
@@ -520,19 +539,38 @@ function docRow(f, canDelete) {
 }
 
 function wireGalleryLazyThumbs(images) {
-  var byId = {}; images.forEach(function (f) { byId[f.fileId] = f; });
   var tiles = document.querySelectorAll('.gallery-tile');
   if (!tiles.length) return;
+
+  var pending = [];
+  var flushTimer = null;
+
+  function flush() {
+    var batch = pending.splice(0, pending.length);
+    if (!batch.length) return;
+    var ids = batch.map(function (b) { return b.fileId; });
+    Api.get('getFileContentBatch', { fileIds: ids.join(','), thumbnail: 'true' }).then(function (results) {
+      var byId = {};
+      results.forEach(function (r) { byId[r.fileId] = r; });
+      batch.forEach(function (b) {
+        var r = byId[b.fileId];
+        var wrap = b.tile.querySelector('.gallery-tile__thumb-wrap');
+        if (r && r.ok !== false && r.base64) {
+          wrap.innerHTML = '<img class="gallery-tile__thumb" src="data:' + r.mimeType + ';base64,' + r.base64 + '" alt="' + escapeHtml(r.fileName || '') + '" loading="lazy">';
+        }
+      });
+    }).catch(function () { /* ব্যাচ ব্যর্থ হলে placeholder icon-ই থাকবে, নীরবে বাদ দেওয়া হয় */ });
+  }
+
   var observer = new IntersectionObserver(function (entries) {
     entries.forEach(function (entry) {
       if (!entry.isIntersecting) return;
-      var tile = entry.target;
-      observer.unobserve(tile);
-      var fileId = tile.getAttribute('data-file-id');
-      Api.get('getFileContent', { fileId: fileId, thumbnail: 'true' }).then(function (res) {
-        var wrap = tile.querySelector('.gallery-tile__thumb-wrap');
-        wrap.innerHTML = '<img class="gallery-tile__thumb" src="data:' + res.mimeType + ';base64,' + res.base64 + '" alt="' + escapeHtml(res.fileName) + '">';
-      }).catch(function () { /* thumbnail load failed silently — placeholder icon থাকবে */ });
+      observer.unobserve(entry.target);
+      pending.push({ fileId: entry.target.getAttribute('data-file-id'), tile: entry.target });
+      clearTimeout(flushTimer);
+      // ১২০ms এর মধ্যে একসাথে যতগুলো টাইল viewport-এ ঢোকে, সবগুলো এক ব্যাচে পাঠানো হয়
+      flushTimer = setTimeout(flush, 120);
+      if (pending.length >= 15) { clearTimeout(flushTimer); flush(); } // ১৫টা হলে সাথে সাথে পাঠাও
     });
   }, { rootMargin: '150px' });
   tiles.forEach(function (t) { observer.observe(t); });
