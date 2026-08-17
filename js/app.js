@@ -106,7 +106,7 @@ function renderShell() {
     '      <div id="global-search-menu" class="ss__menu ss__menu--dark" hidden></div>' +
     '    </form>' +
     '    <nav class="topbar__nav">' +
-    (user.role === 'admin' ? '<a href="#/admin/dashboard" class="navlink">' + icon('gear') + '<span>Admin</span></a>' : '') +
+    ((user.role === 'admin' || user.role === 'moderator') ? '<a href="#/admin/dashboard" class="navlink">' + icon('gear') + '<span>Admin</span></a>' : '') +
     (user.role === 'contractor' ? '<a href="#/contractor/' + encodeURIComponent(user.contractorId) + '" class="navlink">' + icon('doc') + '<span>My Projects</span></a>' : '') +
     '      <div id="user-slot"></div>' +
     '    </nav>' +
@@ -178,7 +178,7 @@ function renderUserSlot() {
     slot.innerHTML = '<button class="btn btn--primary btn--sm" id="login-btn">Sign in</button>';
     document.getElementById('login-btn').addEventListener('click', openLoginModal);
   } else {
-    var roleLabel = user.role === 'admin' ? 'Admin' : ('Contractor · ' + escapeHtml(user.contractorName || ''));
+    var roleLabel = user.role === 'admin' ? 'Admin' : user.role === 'moderator' ? 'Moderator' : ('Contractor · ' + escapeHtml(user.contractorName || ''));
     slot.innerHTML =
       '<div class="user-badge">' +
       '  <img src="' + (user.picture || '') + '" class="user-avatar" onerror="this.style.display=\'none\'">' +
@@ -290,7 +290,7 @@ function viewHome() {
         '  <h2>Contractors</h2>' +
         '  <div class="btn-row">' +
         '    <button class="btn btn--ghost btn--sm" id="refresh-home-btn" title="Refresh counts">' + icon('refresh') + '</button>' +
-        (user.role === 'admin' ? '<button class="btn btn--primary btn--sm" id="add-contractor-btn">' + icon('plus') + ' New Contractor</button>' : '') +
+        ((user.role === 'admin' || user.role === 'moderator') ? '<button class="btn btn--primary btn--sm" id="add-contractor-btn">' + icon('plus') + ' New Contractor</button>' : '') +
         '  </div>' +
         '</section>' +
         '<section class="contractor-grid">' +
@@ -300,7 +300,7 @@ function viewHome() {
       document.getElementById('refresh-home-btn').addEventListener('click', function () {
         refreshSearchIndex().then(viewHome).catch(function (err) { Toast.error(err.message); });
       });
-      if (user.role === 'admin') {
+      if ((user.role === 'admin' || user.role === 'moderator')) {
         document.getElementById('add-contractor-btn').addEventListener('click', openAddContractorModal);
       }
     })
@@ -351,14 +351,14 @@ function viewContractor(contractorId) {
         breadcrumb([{ label: 'Home', href: '#/' }, { label: contractor.contractorName }]) +
         '<section class="section-head">' +
         '  <h1>' + (isMine ? 'My Projects — ' : '') + escapeHtml(contractor.contractorName) + ' <span class="mono muted">(' + escapeHtml(contractor.contractorId) + ')</span></h1>' +
-        (user.role === 'admin' ? '<button class="btn btn--primary btn--sm" id="new-system-btn">' + icon('plus') + ' New System</button>' : '') +
+        ((user.role === 'admin' || user.role === 'moderator') ? '<button class="btn btn--primary btn--sm" id="new-system-btn">' + icon('plus') + ' New System</button>' : '') +
         '</section>' +
         (projects.length === 0
           ? '<div class="empty-state"><p>এখনো কোনো প্রজেক্ট তৈরি হয়নি।</p></div>'
           : '<section class="project-grid">' + projects.map(projectBadge).join('') + '</section>')
       );
 
-      if (user.role === 'admin') {
+      if ((user.role === 'admin' || user.role === 'moderator')) {
         document.getElementById('new-system-btn').addEventListener('click', function () { openNewSystemModal(contractorId); });
       }
     })
@@ -462,7 +462,7 @@ function viewProject(projectId) {
       State.projectCache[projectId] = project;
 
       var user = Auth.getUser();
-      var canManage = user.role === 'admin';
+      var canManage = (user.role === 'admin' || user.role === 'moderator');
       var counts = {};
       window.APP_CONFIG.CATEGORIES.forEach(function (c) { counts[c.key] = 0; });
       files.forEach(function (f) { if (counts[f.category] !== undefined) counts[f.category]++; });
@@ -530,8 +530,8 @@ function getProjectMeta(projectId) {
 
 function renderCategoryShell(project, category, filters) {
   var user = Auth.getUser();
-  var canUpload = user.role === 'admin' || (user.role === 'contractor' && user.contractorId === project.contractorId);
-  var canDelete = user.role === 'admin';
+  var canUpload = (user.role === 'admin' || user.role === 'moderator') || (user.role === 'contractor' && user.contractorId === project.contractorId);
+  var canDelete = (user.role === 'admin' || user.role === 'moderator');
 
   mount(
     breadcrumb([
@@ -902,7 +902,7 @@ function runGlobalSearch(query) {
       box.innerHTML = emptyStateHtml('🔍 No Results Found', 'We couldn\u2019t find any project or document matching "' + query + '". Try another Project ID, Contractor or Document Name.');
       return;
     }
-    var canDelete = Auth.isAdmin();
+    var canDelete = Auth.isAdminOrModerator();
     var html = '<p class="muted">' + total + ' result' + (total === 1 ? '' : 's') + ' found for "' + escapeHtml(query) + '"</p>';
     if (res.projects.length) {
       html += '<h3 class="results-subhead">Projects (' + res.projects.length + ')</h3><div class="project-grid">' + res.projects.map(searchProjectCard).join('') + '</div>';
@@ -1008,7 +1008,7 @@ function runAdvancedSearch(filters) {
   box.innerHTML = loadingHtml('⏳ Searching...');
   Api.get('listFiles', filters).then(function (files) {
     if (!files.length) { box.innerHTML = emptyStateHtml('🔍 No Results Found', 'Try different filters, or Reset and start again.'); return; }
-    var canDelete = Auth.isAdmin();
+    var canDelete = Auth.isAdminOrModerator();
     var images = files.filter(function (f) { return f.isImage; });
     var docs = files.filter(function (f) { return !f.isImage; });
     box.innerHTML = '<p class="muted">' + files.length + ' file(s) found</p>' +
@@ -1034,7 +1034,7 @@ var ADMIN_TABS = [
 ];
 
 function viewAdmin(tab) {
-  if (!Auth.isAdmin()) { mount('<div class="empty-state"><p>এই পাতা দেখার অনুমতি আপনার নেই। Admin হিসেবে সাইন-ইন করুন।</p></div>'); return; }
+  if (!Auth.isAdminOrModerator()) { mount('<div class="empty-state"><p>এই পাতা দেখার অনুমতি আপনার নেই। Admin হিসেবে সাইন-ইন করুন।</p></div>'); return; }
   mount(
     '<section class="section-head"><h1>Admin Dashboard</h1></section>' +
     '<div class="admin-tabs">' + ADMIN_TABS.map(function (t) {
@@ -1127,6 +1127,13 @@ function adminProjectsTab() {
   }).catch(function (err) { box.innerHTML = errorHtml(err.message); });
 }
 
+function roleDisplayLabel(role) {
+  if (role === 'admin') return 'Admin';
+  if (role === 'moderator') return '<span class="badge badge--active">Moderator</span>';
+  if (role === 'contractor') return 'Contractor';
+  return escapeHtml(role);
+}
+
 function adminUsersTab() {
   var box = document.getElementById('admin-content');
   Api.get('listUsers', {}).then(function (users) {
@@ -1134,7 +1141,7 @@ function adminUsersTab() {
       '<div class="section-head"><h2></h2><button class="btn btn--primary btn--sm" id="add-u-btn">' + icon('plus') + ' Add User</button></div>' +
       '<table class="data-table"><thead><tr><th>Email</th><th>Role</th><th>Contractor</th><th>Status</th><th></th></tr></thead><tbody>' +
       users.map(function (u) {
-        return '<tr><td>' + escapeHtml(u.email) + '</td><td>' + escapeHtml(u.role) + '</td><td>' + escapeHtml(u.contractorName) + '</td>' +
+        return '<tr><td>' + escapeHtml(u.email) + '</td><td>' + roleDisplayLabel(u.role) + '</td><td>' + escapeHtml(u.contractorName) + '</td>' +
           '<td><span class="badge ' + (u.status === 'Disabled' ? 'badge--muted' : 'badge--active') + '">' + escapeHtml(u.status) + '</span></td>' +
           '<td class="btn-row"><button class="icon-btn" data-edit-u="' + escapeHtml(u.email) + '" data-role="' + escapeHtml(u.role) + '" data-cid="' + escapeHtml(u.contractorId) + '" title="Edit">' + icon('edit') + '</button>' +
           '<button class="btn btn--ghost btn--sm" data-toggle-u="' + escapeHtml(u.email) + '" data-status="' + (u.status === 'Disabled' ? 'Active' : 'Disabled') + '">' + (u.status === 'Disabled' ? 'Enable' : 'Disable') + '</button></td></tr>';
@@ -1160,7 +1167,7 @@ function openAddUserModal() {
       '<div class="modal modal--sm"><div class="modal__head"><h3>Add User</h3><button class="icon-btn modal-close">' + icon('close') + '</button></div>' +
       '<div class="modal__body"><form id="add-u-form">' +
       '<label>Email (Google account)<input type="email" name="email" required></label>' +
-      '<label>Role<select name="role" id="u-role"><option value="contractor">Contractor</option><option value="admin">Admin</option></select></label>' +
+      '<label>Role<select name="role" id="u-role"><option value="contractor">Contractor</option><option value="moderator">Moderator (Full Access)</option><option value="admin">Admin</option></select></label>' +
       '<label id="u-contractor-wrap">Contractor<select name="contractorId">' + contractors.map(function (c) { return '<option value="' + escapeHtml(c.contractorId) + '">' + escapeHtml(c.contractorName) + '</option>'; }).join('') + '</select></label>' +
       '<button type="submit" class="btn btn--primary btn--block">Add User</button></form></div></div>'
     );
@@ -1183,7 +1190,7 @@ function openEditUserModal(email, currentRole, currentContractorId) {
       '<div class="modal modal--sm"><div class="modal__head"><h3>Edit User</h3><button class="icon-btn modal-close">' + icon('close') + '</button></div>' +
       '<div class="modal__body"><form id="edit-u-form">' +
       '<label>Email<input type="email" value="' + escapeHtml(email) + '" disabled></label>' +
-      '<label>Role<select name="role" id="eu-role"><option value="contractor"' + (currentRole === 'contractor' ? ' selected' : '') + '>Contractor</option><option value="admin"' + (currentRole === 'admin' ? ' selected' : '') + '>Admin</option></select></label>' +
+      '<label>Role<select name="role" id="eu-role"><option value="contractor"' + (currentRole === 'contractor' ? ' selected' : '') + '>Contractor</option><option value="moderator"' + (currentRole === 'moderator' ? ' selected' : '') + '>Moderator (Full Access)</option><option value="admin"' + (currentRole === 'admin' ? ' selected' : '') + '>Admin</option></select></label>' +
       '<label id="eu-contractor-wrap" style="display:' + (currentRole === 'contractor' ? '' : 'none') + '">Contractor<select name="contractorId">' +
       contractors.map(function (c) { return '<option value="' + escapeHtml(c.contractorId) + '"' + (c.contractorId === currentContractorId ? ' selected' : '') + '>' + escapeHtml(c.contractorName) + '</option>'; }).join('') +
       '</select></label>' +
