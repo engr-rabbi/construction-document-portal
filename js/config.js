@@ -14,6 +14,13 @@ window.APP_CONFIG = {
   GOOGLE_CLIENT_ID: '1085661093981-4g5ok9v93dec5fhshfbj8vco1uonm49t.apps.googleusercontent.com',
 
   APP_NAME: 'Construction Document Portal',
+
+  // ছবি আপলোডের আগে ব্রাউজারেই compress করা হয় (মূল ফাইল হিসেবেই, রেজোলিউশন/সাইজ কমে
+  // কিন্তু ভালো visual quality থাকে) — Quick View/Download দ্রুত হওয়ার জন্য এটা জরুরি।
+  // প্রয়োজনে এই মানগুলো বদলে নিতে পারেন (বড় সংখ্যা = ভালো quality কিন্তু বড় ফাইল)।
+  UPLOAD_IMAGE: { maxDim: 2000, quality: 0.85 },   // মূল ছবির জন্য (যেটা Quick View/Download-এ ব্যবহার হয়)
+  THUMBNAIL: { maxDim: 420, quality: 0.72 },        // গ্যালারি গ্রিডের ছোট প্রিভিউয়ের জন্য
+
   CATEGORIES: [
     { key: 'Construction Time Picture', icon: 'camera', label: 'Construction Time Picture' },
     { key: 'Completion Picture', icon: 'flag', label: 'Completion Picture' },

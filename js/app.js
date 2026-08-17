@@ -268,9 +268,10 @@ function errorHtml(message) { return errorStateHtml(message); }
 
 function viewHome() {
   mount(loadingHtml('ড্যাশবোর্ড লোড হচ্ছে...'));
-  Promise.all([Api.get('dashboardStats', {}), Api.get('listContractors', {})])
+  Promise.all([Api.get('dashboardStats', {}), ensureSearchIndexLoaded()])
     .then(function (res) {
-      var stats = res[0], contractors = res[1];
+      var stats = res[0];
+      var contractors = State.allContractors;
       var user = Auth.getUser();
       mount(
         '<section class="hero">' +
@@ -287,12 +288,18 @@ function viewHome() {
         '</section>' +
         '<section class="section-head">' +
         '  <h2>Contractors</h2>' +
+        '  <div class="btn-row">' +
+        '    <button class="btn btn--ghost btn--sm" id="refresh-home-btn" title="Refresh counts">' + icon('refresh') + '</button>' +
         (user.role === 'admin' ? '<button class="btn btn--primary btn--sm" id="add-contractor-btn">' + icon('plus') + ' New Contractor</button>' : '') +
+        '  </div>' +
         '</section>' +
         '<section class="contractor-grid">' +
         contractors.map(plateCard).join('') +
         '</section>'
       );
+      document.getElementById('refresh-home-btn').addEventListener('click', function () {
+        refreshSearchIndex().then(viewHome).catch(function (err) { Toast.error(err.message); });
+      });
       if (user.role === 'admin') {
         document.getElementById('add-contractor-btn').addEventListener('click', openAddContractorModal);
       }
@@ -331,10 +338,10 @@ function breadcrumb(items) {
 
 function viewContractor(contractorId) {
   mount(loadingHtml());
-  Promise.all([Api.get('listContractors', {}), Api.get('listProjects', { contractorId: contractorId })])
-    .then(function (res) {
-      var contractor = res[0].filter(function (c) { return c.contractorId === contractorId; })[0];
-      var projects = res[1];
+  ensureSearchIndexLoaded()
+    .then(function () {
+      var contractor = State.allContractors.filter(function (c) { return c.contractorId === contractorId; })[0];
+      var projects = State.allProjects.filter(function (p) { return p.contractorId === contractorId; });
       var user = Auth.getUser();
       if (!contractor) { mount(errorHtml('Contractor পাওয়া যায়নি')); return; }
 
@@ -433,6 +440,7 @@ function openEditProjectModal(projectId, currentName) {
         Modal.close();
         Toast.success('Project আপডেট হয়েছে');
         delete State.projectCache[projectId];
+        refreshSearchIndex();
         router();
       })
       .catch(function (err) { Toast.error(err.message); });
@@ -443,9 +451,12 @@ function openEditProjectModal(projectId, currentName) {
 
 function viewProject(projectId) {
   mount(loadingHtml());
-  Promise.all([Api.get('listProjects', {}), Api.get('listFiles', { projectId: projectId })])
+  Promise.all([
+    ensureSearchIndexLoaded().then(function () { return State.allProjects.filter(function (p) { return p.projectId === projectId; })[0]; }),
+    Api.get('listFiles', { projectId: projectId })
+  ])
     .then(function (res) {
-      var project = res[0].filter(function (p) { return p.projectId === projectId; })[0];
+      var project = res[0];
       var files = res[1];
       if (!project) { mount(errorHtml('Project পাওয়া যায়নি')); return; }
       State.projectCache[projectId] = project;
@@ -490,7 +501,7 @@ function viewProject(projectId) {
         document.getElementById('archive-btn').addEventListener('click', function () {
           var newStatus = project.status === 'Archived' ? 'Active' : 'Archived';
           Api.post('archiveProject', { projectId: projectId, status: newStatus })
-            .then(function () { Toast.success('Status আপডেট হয়েছে'); router(); })
+            .then(function () { Toast.success('Status আপডেট হয়েছে'); refreshSearchIndex(); router(); })
             .catch(function (err) { Toast.error(err.message); });
         });
       }
@@ -510,8 +521,8 @@ function viewCategory(projectId, category) {
 
 function getProjectMeta(projectId) {
   if (State.projectCache[projectId]) return Promise.resolve(State.projectCache[projectId]);
-  return Api.get('listProjects', {}).then(function (all) {
-    var p = all.filter(function (x) { return x.projectId === projectId; })[0];
+  return ensureSearchIndexLoaded().then(function () {
+    var p = State.allProjects.filter(function (x) { return x.projectId === projectId; })[0];
     if (p) State.projectCache[projectId] = p;
     return p;
   });
@@ -613,12 +624,12 @@ function handleFiles(fileList, projectId, category) {
       statusEl.textContent = Math.round(simPct) + '%';
     }, 250);
 
-    Promise.all([fileToBase64(file), makeThumbnail(file)])
+    Promise.all([compressImageForUpload(file), makeThumbnail(file)])
       .then(function (res) {
-        var base64 = res[0], thumbBase64 = res[1];
+        var main = res[0], thumbBase64 = res[1];
         return Api.post('uploadFile', {
-          projectId: projectId, category: category, fileName: file.name,
-          mimeType: file.type || 'application/octet-stream', fileData: base64,
+          projectId: projectId, category: category, fileName: main.fileName,
+          mimeType: main.mimeType, fileData: main.base64,
           thumbnailData: thumbBase64 || undefined
         });
       })
@@ -627,6 +638,7 @@ function handleFiles(fileList, projectId, category) {
         barEl.style.width = '100%';
         statusEl.innerHTML = '✅ Uploaded';
         row.classList.add('upload-item--ok');
+        refreshSearchIndex();
         refreshFileAreaIfPresent(projectId, category);
       })
       .catch(function (err) {
@@ -751,7 +763,7 @@ function wireDeleteButtons(area, onDeleted) {
       e.stopPropagation();
       if (!confirm('এই ফাইলটি মুছে ফেলতে চান?')) return;
       Api.post('deleteFile', { fileId: btn.getAttribute('data-delete-id') })
-        .then(function () { Toast.success('ফাইল মুছে ফেলা হয়েছে'); if (onDeleted) onDeleted(); })
+        .then(function () { Toast.success('ফাইল মুছে ফেলা হয়েছে'); refreshSearchIndex(); if (onDeleted) onDeleted(); })
         .catch(function (err) { Toast.error(err.message); });
     });
   });
@@ -1066,7 +1078,7 @@ function adminContractorsTab() {
     box.querySelectorAll('[data-toggle-c]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         Api.post('setContractorStatus', { contractorId: btn.getAttribute('data-toggle-c'), status: btn.getAttribute('data-status') })
-          .then(function () { adminContractorsTab(); }).catch(function (err) { Toast.error(err.message); });
+          .then(function () { refreshSearchIndex(); adminContractorsTab(); }).catch(function (err) { Toast.error(err.message); });
       });
     });
   }).catch(function (err) { box.innerHTML = errorHtml(err.message); });
@@ -1082,7 +1094,7 @@ function openAddContractorModal() {
   node.querySelector('#add-c-form').addEventListener('submit', function (e) {
     e.preventDefault();
     Api.post('addContractor', { contractorName: e.target.contractorName.value.trim() })
-      .then(function () { Modal.close(); Toast.success('Contractor যোগ হয়েছে'); router(); })
+      .then(function () { Modal.close(); Toast.success('Contractor যোগ হয়েছে'); refreshSearchIndex(); router(); })
       .catch(function (err) { Toast.error(err.message); });
   });
 }
@@ -1109,7 +1121,7 @@ function adminProjectsTab() {
     box.querySelectorAll('[data-archive-p]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         Api.post('archiveProject', { projectId: btn.getAttribute('data-archive-p'), status: btn.getAttribute('data-status') })
-          .then(function () { adminProjectsTab(); }).catch(function (err) { Toast.error(err.message); });
+          .then(function () { refreshSearchIndex(); adminProjectsTab(); }).catch(function (err) { Toast.error(err.message); });
       });
     });
   }).catch(function (err) { box.innerHTML = errorHtml(err.message); });
@@ -1229,7 +1241,7 @@ function adminTrashTab() {
     list.querySelectorAll('[data-restore-id]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         Api.post('restoreFile', { fileId: btn.getAttribute('data-restore-id') })
-          .then(function () { Toast.success('ফাইল পুনরুদ্ধার করা হয়েছে'); adminTrashTab(); })
+          .then(function () { Toast.success('ফাইল পুনরুদ্ধার করা হয়েছে'); refreshSearchIndex(); adminTrashTab(); })
           .catch(function (err) { Toast.error(err.message); });
       });
     });
@@ -1257,6 +1269,12 @@ function adminSettingsTab() {
 }
 
 /* ---------------------------------- Bootstrap ---------------------------------- */
+
+window.onSessionExpired = function () {
+  renderShell();
+  Toast.error('আপনার সেশনের মেয়াদ শেষ হয়ে গেছে। অনুগ্রহ করে আবার সাইন-ইন করুন।');
+  openLoginModal();
+};
 
 window.addEventListener('DOMContentLoaded', function () {
   renderShell();

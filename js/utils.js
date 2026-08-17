@@ -83,16 +83,11 @@ function fileToBase64(file) {
 }
 
 /**
- * ছবি আপলোডের আগে ব্রাউজারেই (canvas দিয়ে) একটা ছোট থাম্বনেইল (সর্বোচ্চ ~400px, JPEG)
- * বানিয়ে ফেলে। মূল ফাইল অপরিবর্তিত/পুরো রেজোলিউশনে আপলোড হয় — শুধু গ্যালারি প্রিভিউয়ের
- * জন্য এই ছোট কপিটা আলাদাভাবে পাঠানো হয়, যাতে গ্যালারি লোড অনেক দ্রুত হয়।
- * ছবি ছাড়া অন্য ফাইলের (PDF/DOC ইত্যাদি) জন্য null রিটার্ন করে।
+ * সাধারণ canvas-ভিত্তিক resize+compress helper — maxDim ও quality parametrize করা।
+ * শুধু ছবির জন্য কাজ করে (PDF/DOC ইত্যাদির জন্য null রিটার্ন করে)।
  */
-function makeThumbnail(file, maxDim, quality) {
-  maxDim = maxDim || 420;
-  quality = quality || 0.72;
+function resizeImageToJpegBase64_(file, maxDim, quality) {
   if (!/^image\//.test(file.type)) return Promise.resolve(null);
-
   return new Promise(function (resolve) {
     var url = URL.createObjectURL(file);
     var img = new Image();
@@ -106,10 +101,40 @@ function makeThumbnail(file, maxDim, quality) {
       var ctx = canvas.getContext('2d');
       ctx.drawImage(img, 0, 0, cw, ch);
       URL.revokeObjectURL(url);
-      var dataUrl = canvas.toDataURL('image/jpeg', quality);
-      resolve(dataUrl.split(',')[1]);
+      resolve(canvas.toDataURL('image/jpeg', quality).split(',')[1]);
     };
     img.onerror = function () { URL.revokeObjectURL(url); resolve(null); };
     img.src = url;
+  });
+}
+
+/** গ্যালারি গ্রিডের ছোট প্রিভিউ থাম্বনেইলের জন্য (~৪০০px) */
+function makeThumbnail(file) {
+  var cfg = (window.APP_CONFIG && window.APP_CONFIG.THUMBNAIL) || { maxDim: 420, quality: 0.72 };
+  return resizeImageToJpegBase64_(file, cfg.maxDim, cfg.quality);
+}
+
+/**
+ * মূল আপলোডের জন্য ছবি compress করে — বড় ক্যামেরা/ফোন ছবি (কয়েক MB) resize+re-encode
+ * করে অনেক ছোট (সাধারণত কয়েকশ' KB) করে দেয়, কিন্তু visually ভালো quality বজায় থাকে।
+ * এর ফলে পরে Quick View/Download-এ লোডিং সময় অনেক কমে যায়। PDF/DOC/XLS-এর জন্য
+ * এটা প্রযোজ্য না — সেগুলো অপরিবর্তিত আপলোড হয়।
+ * রিটার্ন করে: { base64, mimeType, fileName } — resize ব্যর্থ হলে মূল ফাইলই fallback হিসেবে যায়।
+ */
+function compressImageForUpload(file) {
+  if (!/^image\//.test(file.type)) {
+    return fileToBase64(file).then(function (base64) {
+      return { base64: base64, mimeType: file.type || 'application/octet-stream', fileName: file.name };
+    });
+  }
+  var cfg = (window.APP_CONFIG && window.APP_CONFIG.UPLOAD_IMAGE) || { maxDim: 2000, quality: 0.85 };
+  return resizeImageToJpegBase64_(file, cfg.maxDim, cfg.quality).then(function (base64) {
+    if (!base64) {
+      // Canvas resize কোনো কারণে ব্যর্থ হলে (যেমন corrupted image) মূল ফাইলই আপলোড হবে,
+      // যাতে পুরো আপলোড আটকে না যায়
+      return fileToBase64(file).then(function (b) { return { base64: b, mimeType: file.type, fileName: file.name }; });
+    }
+    var baseName = file.name.replace(/\.[^./\\]+$/, '');
+    return { base64: base64, mimeType: 'image/jpeg', fileName: baseName + '.jpg' };
   });
 }

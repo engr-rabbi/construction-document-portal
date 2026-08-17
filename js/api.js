@@ -33,9 +33,26 @@ var Api = (function () {
     return fetch(url, opts)
       .then(function (r) { return r.json(); })
       .then(function (res) {
-        if (!res.ok) throw new Error(res.error || 'Unknown error');
+        if (!res.ok) {
+          if (res.error && res.error.indexOf('SESSION_EXPIRED') === 0) handleSessionExpired_();
+          throw new Error(res.error || 'Unknown error');
+        }
         return res.data;
       });
+  }
+
+  // token থাকা সত্ত্বেও backend সেটাকে invalid/expired বলছে — মানে UI-তে হয়তো এখনো
+  // পুরনো "Admin"/"Contractor" badge দেখাচ্ছে কিন্তু আসলে সেশন আর বৈধ না। এই অবস্থায়
+  // পুরনো localStorage session মুছে ফেলে app.js-কে জানানো হয় (পরিষ্কারভাবে আবার
+  // সাইন-ইন করানোর জন্য), যাতে একটা ধোঁয়াশাপূর্ণ FORBIDDEN error দেখে ইউজার আটকে না যায়।
+  var sessionExpiredHandled = false;
+  function handleSessionExpired_() {
+    if (sessionExpiredHandled) return;
+    sessionExpiredHandled = true;
+    localStorage.removeItem('cdp_session_token');
+    localStorage.removeItem('cdp_user');
+    if (window.onSessionExpired) window.onSessionExpired();
+    setTimeout(function () { sessionExpiredHandled = false; }, 4000);
   }
 
   return {
