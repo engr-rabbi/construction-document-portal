@@ -28,6 +28,11 @@ var Auth = (function () {
   }
 
   function isAdmin() { return getUser().role === 'admin'; }
+  function isModerator() { return getUser().role === 'moderator'; }
+  /** "পূর্ণ অ্যাক্সেস" আছে এমন role — Admin এবং Moderator দুটোই। UI-তে admin-only
+   *  বাটন/পেজ দেখানোর সিদ্ধান্ত সবসময় এই ফাংশন দিয়ে নেওয়া উচিত (শুধু isAdmin() না),
+   *  যাতে ভবিষ্যতে নতুন কোনো "full access" role যোগ করা সহজ হয়। */
+  function isAdminOrModerator() { var r = getUser().role; return r === 'admin' || r === 'moderator'; }
   function isContractor() { return getUser().role === 'contractor'; }
 
   /** Google Identity Services লোড হওয়ার পর বাটন রেন্ডার করে */
@@ -57,6 +62,8 @@ var Auth = (function () {
     logout: logout,
     isLoggedIn: isLoggedIn,
     isAdmin: isAdmin,
+    isModerator: isModerator,
+    isAdminOrModerator: isAdminOrModerator,
     isContractor: isContractor,
     renderSignInButton: renderSignInButton
   };
