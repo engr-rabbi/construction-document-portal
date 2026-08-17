@@ -20,7 +20,9 @@ var Icons = {
   doc: '<path d="M6 3h9l5 5v13a1 1 0 0 1-1 1H6a1 1 0 0 1-1-1V4a1 1 0 0 1 1-1z"/><path d="M14 3v5h5"/>',
   refresh: '<path d="M20 11A8 8 0 1 0 6.3 6.3L4 8.6"/><path d="M4 4v5h5"/>',
   users: '<circle cx="9" cy="8" r="3"/><path d="M3 20a6 6 0 0 1 12 0"/><path d="M17 8a3 3 0 1 1 0 6"/><path d="M15 20a6 6 0 0 0-.5-2.4"/>',
-  log: '<path d="M4 4h16v4H4z"/><path d="M4 12h16M4 16h10M4 20h13"/>'
+  log: '<path d="M4 4h16v4H4z"/><path d="M4 12h16M4 16h10M4 20h13"/>',
+  building: '<path d="M6 21V4a1 1 0 0 1 1-1h10a1 1 0 0 1 1 1v17"/><path d="M9 8h1M14 8h1M9 12h1M14 12h1M9 16h1M14 16h1"/><path d="M3 21h18"/>',
+  eye: '<path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/>'
 };
 function icon(name, cls) {
   return '<svg class="icon ' + (cls || '') + '" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">' + (Icons[name] || '') + '</svg>';

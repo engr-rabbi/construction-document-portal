@@ -8,7 +8,88 @@
  * আলাদা .html ফাইলে ভাঙা যাবে।
  */
 
-var State = { projectCache: {} };
+var State = { projectCache: {}, allProjects: null, allContractors: null, searchIndexPromise: null };
+
+/**
+ * Project ID কয়েকশ' হলেও প্রতি keystroke-এ সার্ভারে না গিয়ে instant client-side
+ * filtering করার জন্য পুরো Project+Contractor লিস্ট একবার লোড করে cache করা হয়
+ * (§১২: "Google Drive folder tree scan না করে দ্রুত সার্চ")। নতুন কোনো Project
+ * তৈরি হলে refreshSearchIndex() দিয়ে সহজেই আবার লোড করা যায়।
+ */
+function ensureSearchIndexLoaded() {
+  if (State.searchIndexPromise) return State.searchIndexPromise;
+  State.searchIndexPromise = Promise.all([Api.get('listProjects', {}), Api.get('listContractors', {})])
+    .then(function (res) {
+      State.allProjects = res[0];
+      State.allContractors = res[1];
+      return res;
+    })
+    .catch(function (err) { State.searchIndexPromise = null; throw err; });
+  return State.searchIndexPromise;
+}
+function refreshSearchIndex() { State.searchIndexPromise = null; return ensureSearchIndexLoaded(); }
+
+/**
+ * সাধারণ পুনঃব্যবহারযোগ্য Searchable Combobox — একটা কন্টেইনারে বসিয়ে দিলে
+ * type-করার সাথে সাথে (client-side, তাই instant) filter করা dropdown দেখায়।
+ * Contractor/Project ID পিকারে ব্যবহৃত হয় (§১, §২: searchable, real-time,
+ * partial+exact match, case-insensitive)।
+ */
+function mountSearchableSelect(containerEl, options, config) {
+  config = config || {};
+  containerEl.innerHTML = '';
+  containerEl.classList.add('ss');
+  var input = el('<input type="text" class="ss__input" placeholder="' + escapeHtml(config.placeholder || 'Search...') + '" autocomplete="off">');
+  var menu = el('<div class="ss__menu" hidden></div>');
+  containerEl.appendChild(input);
+  containerEl.appendChild(menu);
+  if (config.initialLabel) input.value = config.initialLabel;
+
+  var filtered = options, highlighted = -1;
+
+  function renderMenu() {
+    menu.innerHTML = !filtered.length
+      ? '<div class="ss__empty">কোনো ফলাফল নেই</div>'
+      : filtered.slice(0, 50).map(function (o, i) {
+        return '<div class="ss__item' + (i === highlighted ? ' ss__item--active' : '') + '" data-idx="' + i + '">' +
+          '<span class="ss__item-label mono">' + escapeHtml(o.label) + '</span>' +
+          (o.sublabel ? '<span class="ss__item-sub">' + escapeHtml(o.sublabel) + '</span>' : '') +
+          '</div>';
+      }).join('');
+    menu.hidden = false;
+    menu.querySelectorAll('.ss__item').forEach(function (item) {
+      item.addEventListener('mousedown', function (e) {
+        e.preventDefault();
+        select(filtered[Number(item.getAttribute('data-idx'))]);
+      });
+    });
+  }
+  function select(option) {
+    input.value = option.label;
+    menu.hidden = true; highlighted = -1;
+    if (config.onSelect) config.onSelect(option.value, option);
+  }
+  function filterNow() {
+    var q = input.value.trim().toLowerCase();
+    filtered = !q ? options : options.filter(function (o) {
+      return (o.label + ' ' + (o.sublabel || '') + ' ' + o.value).toLowerCase().indexOf(q) !== -1;
+    });
+    highlighted = -1;
+    renderMenu();
+  }
+  input.addEventListener('input', function () { filterNow(); if (!input.value && config.onClear) config.onClear(); });
+  input.addEventListener('focus', filterNow);
+  input.addEventListener('keydown', function (e) {
+    if (menu.hidden && e.key !== 'ArrowDown') return;
+    if (e.key === 'ArrowDown') { e.preventDefault(); highlighted = Math.min(highlighted + 1, filtered.length - 1); renderMenu(); }
+    else if (e.key === 'ArrowUp') { e.preventDefault(); highlighted = Math.max(highlighted - 1, 0); renderMenu(); }
+    else if (e.key === 'Enter') { e.preventDefault(); if (highlighted >= 0 && filtered[highlighted]) select(filtered[highlighted]); }
+    else if (e.key === 'Escape') { menu.hidden = true; }
+  });
+  document.addEventListener('click', function (e) { if (!containerEl.contains(e.target)) menu.hidden = true; });
+
+  return { setOptions: function (o) { options = o; filterNow(); }, clear: function () { input.value = ''; } };
+}
 
 /* ---------------------------- App shell / header --------------------------- */
 
@@ -20,8 +101,9 @@ function renderShell() {
     '  <div class="topbar__inner">' +
     '    <a href="#/" class="brand"><span class="brand__mark">CDP</span><span class="brand__name">' + escapeHtml(window.APP_CONFIG.APP_NAME) + '</span></a>' +
     '    <form id="global-search" class="topbar__search">' +
-    '      <input type="text" name="q" placeholder="Contractor, Project ID, file name...">' +
+    '      <input type="text" id="global-search-input" name="q" placeholder="Search Project ID, Contractor or Document..." autocomplete="off">' +
     '      <button type="submit" aria-label="Search">' + icon('search') + '</button>' +
+    '      <div id="global-search-menu" class="ss__menu ss__menu--dark" hidden></div>' +
     '    </form>' +
     '    <nav class="topbar__nav">' +
     (user.role === 'admin' ? '<a href="#/admin/dashboard" class="navlink">' + icon('gear') + '<span>Admin</span></a>' : '') +
@@ -38,8 +120,55 @@ function renderShell() {
     var q = e.target.q.value.trim();
     if (q) location.hash = '#/search/' + encodeURIComponent(q);
   });
+  wireHeaderSuggestions();
 
   renderUserSlot();
+}
+
+function wireHeaderSuggestions() {
+  var input = document.getElementById('global-search-input');
+  var menu = document.getElementById('global-search-menu');
+  if (!input) return;
+
+  ensureSearchIndexLoaded().catch(function () { /* suggestions ব্যর্থ হলে normal Enter-search কাজ করবে */ });
+
+  function suggestionsFor(q) {
+    if (!State.allProjects) return [];
+    q = q.toLowerCase();
+    var out = [];
+    State.allContractors.forEach(function (c) {
+      if ((c.contractorId + ' ' + c.contractorName).toLowerCase().indexOf(q) !== -1) {
+        out.push({ kind: 'contractor', label: c.contractorName, sub: c.contractorId, href: '#/contractor/' + encodeURIComponent(c.contractorId) });
+      }
+    });
+    State.allProjects.forEach(function (p) {
+      if ((p.projectId + ' ' + p.projectName + ' ' + p.contractorName).toLowerCase().indexOf(q) !== -1) {
+        out.push({ kind: 'project', label: p.projectId, sub: p.projectName + ' · ' + p.contractorName, href: '#/project/' + encodeURIComponent(p.projectId) });
+      }
+    });
+    return out.slice(0, 8);
+  }
+
+  function render(list) {
+    if (!list.length) { menu.hidden = true; return; }
+    menu.innerHTML = list.map(function (s, i) {
+      return '<a class="ss__item" data-idx="' + i + '" href="' + s.href + '">' +
+        icon(s.kind === 'contractor' ? 'users' : 'doc', 'ss__item-icon') +
+        '<span><span class="ss__item-label mono">' + escapeHtml(s.label) + '</span><span class="ss__item-sub">' + escapeHtml(s.sub) + '</span></span>' +
+        '</a>';
+    }).join('');
+    menu.hidden = false;
+    menu.querySelectorAll('.ss__item').forEach(function (a) {
+      a.addEventListener('click', function () { menu.hidden = true; input.value = ''; });
+    });
+  }
+
+  input.addEventListener('input', function () {
+    var q = input.value.trim();
+    render(q.length >= 1 ? suggestionsFor(q) : []);
+  });
+  input.addEventListener('focus', function () { if (input.value.trim()) render(suggestionsFor(input.value.trim())); });
+  document.addEventListener('click', function (e) { if (!e.target.closest('#global-search')) menu.hidden = true; });
 }
 
 function renderUserSlot() {
@@ -125,9 +254,15 @@ function loadingHtml(label) {
   return '<div class="loading"><div class="spinner"></div><p>' + escapeHtml(label || 'লোড হচ্ছে...') + '</p></div>';
 }
 
-function errorHtml(message) {
-  return '<div class="empty-state empty-state--error"><p>' + escapeHtml(message) + '</p><button class="btn btn--ghost" onclick="router()">' + icon('refresh') + ' আবার চেষ্টা করুন</button></div>';
+function emptyStateHtml(title, subtitle) {
+  return '<div class="empty-state"><div class="empty-state__icon">' + icon('search') + '</div><h3>' + escapeHtml(title) + '</h3><p class="muted">' + escapeHtml(subtitle || '') + '</p></div>';
 }
+
+function errorStateHtml(message) {
+  return '<div class="empty-state empty-state--error"><div class="empty-state__icon">' + icon('close') + '</div><h3>⚠️ Something went wrong</h3><p class="muted">' + escapeHtml(message) + '</p><button class="btn btn--ghost" onclick="router()">' + icon('refresh') + ' Try again</button></div>';
+}
+
+function errorHtml(message) { return errorStateHtml(message); }
 
 /* ---------------------------------- Home ------------------------------------ */
 
@@ -144,11 +279,11 @@ function viewHome() {
         '  <p class="hero__sub">প্রতিটি ঠিকাদার প্রতিষ্ঠানের প্রজেক্ট-ভিত্তিক ছবি ও ডকুমেন্ট এক জায়গায়।</p>' +
         '</section>' +
         '<section class="stat-strip">' +
-        statCard(stats.totalContractors, 'Contractors') +
-        statCard(stats.totalProjects, 'Projects') +
-        statCard(stats.totalPhotos, 'Photos') +
-        statCard(stats.totalDocuments, 'Documents') +
-        statCard(stats.todaysUploads, "Today's Uploads") +
+        statCard('doc', stats.totalProjects, 'Total Projects') +
+        statCard('camera', stats.totalPhotos, 'Total Photos') +
+        statCard('doc', stats.totalDocuments, 'Total Documents') +
+        statCard('building', stats.totalContractors, 'Total Contractors') +
+        statCard('upload', stats.todaysUploads, "Today's Uploads") +
         '</section>' +
         '<section class="section-head">' +
         '  <h2>Contractors</h2>' +
@@ -165,8 +300,8 @@ function viewHome() {
     .catch(function (err) { mount(errorHtml(err.message)); });
 }
 
-function statCard(value, label) {
-  return '<div class="stat-card"><div class="stat-card__value">' + escapeHtml(value) + '</div><div class="stat-card__label">' + escapeHtml(label) + '</div></div>';
+function statCard(iconName, value, label) {
+  return '<div class="stat-card">' + icon(iconName, 'stat-card__icon') + '<div class="stat-card__value">' + escapeHtml(value) + '</div><div class="stat-card__label">' + escapeHtml(label) + '</div></div>';
 }
 
 function plateCard(c) {
@@ -175,10 +310,12 @@ function plateCard(c) {
     '<a class="plate-card" href="#/contractor/' + encodeURIComponent(c.contractorId) + '">' +
     '  <div class="plate-card__rivet plate-card__rivet--tl"></div><div class="plate-card__rivet plate-card__rivet--tr"></div>' +
     '  <div class="plate-card__rivet plate-card__rivet--bl"></div><div class="plate-card__rivet plate-card__rivet--br"></div>' +
+    icon('building', 'plate-card__icon') +
     '  <span class="plate-card__code">' + escapeHtml(c.contractorId) + '</span>' +
     '  <h3 class="plate-card__name">' + escapeHtml(c.contractorName) + '</h3>' +
     '  <div class="plate-card__stats"><span>' + c.projectCount + ' projects</span><span>' + c.fileCount + ' files</span></div>' +
     '  <span class="badge ' + statusCls + '">' + escapeHtml(c.status) + '</span>' +
+    '  <span class="plate-card__cta">View Projects →</span>' +
     '</a>'
   );
 }
@@ -227,8 +364,9 @@ function projectBadge(p) {
     '<a class="project-badge" href="#/project/' + encodeURIComponent(p.projectId) + '">' +
     '  <span class="project-badge__id mono">' + escapeHtml(p.projectId) + '</span>' +
     '  <span class="project-badge__name">' + escapeHtml(p.projectName) + '</span>' +
-    '  <span class="project-badge__meta">' + p.fileCount + ' files</span>' +
+    '  <span class="project-badge__meta">' + icon('camera') + ' ' + (p.photoCount || 0) + ' Photos &nbsp; ' + icon('doc') + ' ' + (p.docCount || 0) + ' Documents</span>' +
     '  <span class="badge ' + statusCls + '">' + escapeHtml(p.status) + '</span>' +
+    '  <span class="project-badge__cta">' + icon('eye') + ' Quick View</span>' +
     '</a>'
   );
 }
@@ -264,6 +402,7 @@ function openNewSystemModal(defaultContractorId) {
       }).then(function (data) {
         Modal.close();
         Toast.success('Project তৈরি হয়েছে: ' + data.projectId);
+        refreshSearchIndex();
         location.hash = '#/project/' + encodeURIComponent(data.projectId);
       }).catch(function (err) {
         Toast.error(err.message);
@@ -456,33 +595,42 @@ function handleFiles(fileList, projectId, category) {
     var row = el(
       '<div class="upload-item">' +
       '  <div class="upload-item__top"><span class="upload-item__name">' + escapeHtml(file.name) + '</span><span class="upload-item__status">প্রস্তুত হচ্ছে...</span></div>' +
-      '  <div class="upload-item__bar"><div class="upload-item__bar-fill" style="width:0%"></div></div>' +
+      '  <div class="upload-item__bar"><div class="upload-item__bar-fill" style="width:4%"></div></div>' +
       '</div>'
     );
     list.appendChild(row);
     var statusEl = row.querySelector('.upload-item__status');
     var barEl = row.querySelector('.upload-item__bar-fill');
 
+    // Apps Script Web App-এর সাথে real byte-level upload progress সম্ভব না (দেখুন api.js-এর
+    // নোট — xhr.upload progress listener CORS preflight ট্রিগার করে, যা Apps Script হ্যান্ডেল
+    // করতে পারে না)। তাই এখানে একটা smooth "simulated" progress ব্যবহার করা হচ্ছে যা আসল
+    // আপলোড শেষ না হওয়া পর্যন্ত ধীরে ধীরে ~90% পর্যন্ত এগোয়, তারপর success/fail এ snap করে।
+    var simPct = 4;
+    var simTimer = setInterval(function () {
+      simPct += (90 - simPct) * 0.12;
+      barEl.style.width = simPct + '%';
+      statusEl.textContent = Math.round(simPct) + '%';
+    }, 250);
+
     Promise.all([fileToBase64(file), makeThumbnail(file)])
       .then(function (res) {
         var base64 = res[0], thumbBase64 = res[1];
-        statusEl.textContent = '0%';
-        return Api.postWithProgress('uploadFile', {
+        return Api.post('uploadFile', {
           projectId: projectId, category: category, fileName: file.name,
           mimeType: file.type || 'application/octet-stream', fileData: base64,
           thumbnailData: thumbBase64 || undefined
-        }, function (pct) {
-          barEl.style.width = pct + '%';
-          statusEl.textContent = pct + '%';
         });
       })
       .then(function () {
-        statusEl.innerHTML = '✅ Uploaded';
+        clearInterval(simTimer);
         barEl.style.width = '100%';
+        statusEl.innerHTML = '✅ Uploaded';
         row.classList.add('upload-item--ok');
         refreshFileAreaIfPresent(projectId, category);
       })
       .catch(function (err) {
+        clearInterval(simTimer);
         statusEl.innerHTML = '❌ ' + escapeHtml(err.message);
         row.classList.add('upload-item--fail');
       });
@@ -497,48 +645,55 @@ function refreshFileAreaIfPresent() {
 function loadFileArea(filters, canDelete) {
   var area = document.getElementById('file-area');
   area.innerHTML = loadingHtml('ফাইল লোড হচ্ছে...');
-  Api.get('listFiles', filters).then(function (files) {
-    if (files.length === 0) { area.innerHTML = '<div class="empty-state"><p>কোনো ফাইল পাওয়া যায়নি।</p></div>'; return; }
-    var images = files.filter(function (f) { return f.isImage; });
-    var docs = files.filter(function (f) { return !f.isImage; });
+  Api.get('listFiles', filters).then(function (allFiles) {
+    if (allFiles.length === 0) { area.innerHTML = emptyStateHtml('🔍 No Results Found', "We couldn't find any file matching your filters. Try a different name, category or date range."); return; }
+    var images = allFiles.filter(function (f) { return f.isImage; });
+    var docs = allFiles.filter(function (f) { return !f.isImage; });
 
     area.innerHTML =
-      (images.length ? '<div class="gallery-grid">' + images.map(function (f, i) { return galleryTile(f, i, canDelete); }).join('') + '</div>' : '') +
-      (docs.length ? '<div class="doc-list">' + docs.map(function (f) { return docRow(f, canDelete); }).join('') + '</div>' : '');
+      (images.length ? '<div class="gallery-grid">' + images.map(function (f) { return galleryTile(f, allFiles.indexOf(f), canDelete); }).join('') + '</div>' : '') +
+      (docs.length ? '<div class="doc-list">' + docs.map(function (f) { return docRow(f, allFiles.indexOf(f), canDelete); }).join('') + '</div>' : '');
 
-    wireGalleryLazyThumbs(images);
-    wireGalleryClicks(images);
-    wireDeleteButtons(area, filters);
+    wireGalleryLazyThumbs();
+    wireQuickViewClicks(area, allFiles);
+    wireDeleteButtons(area, function () { loadFileArea(filters, true); });
     wireDownloadButtons(area);
-  }).catch(function (err) { area.innerHTML = errorHtml(err.message); });
+  }).catch(function (err) { area.innerHTML = errorStateHtml(err.message); });
 }
 
-function galleryTile(f, idx, canDelete) {
+function galleryTile(f, idx, canDelete, showContext) {
   return (
     '<figure class="gallery-tile" data-file-id="' + escapeHtml(f.fileId) + '" data-idx="' + idx + '">' +
     '  <div class="gallery-tile__thumb-wrap">' + icon('image', 'gallery-tile__placeholder') + '</div>' +
+    '  <div class="gallery-tile__hover"><span class="gallery-tile__hover-btn">' + icon('search') + ' Quick View</span></div>' +
     '  <figcaption>' +
     '    <span class="gallery-tile__name">' + escapeHtml(f.fileName) + '</span>' +
-    '    <span class="gallery-tile__date mono">' + formatDate(f.uploadDate) + '</span>' +
+    (showContext
+      ? '<span class="gallery-tile__context mono">' + escapeHtml(f.projectId) + ' · ' + escapeHtml(f.category) + '</span>'
+      : '<span class="gallery-tile__date mono">' + formatDate(f.uploadDate) + '</span>') +
     '  </figcaption>' +
     (canDelete ? '<button class="icon-btn gallery-tile__delete" data-delete-id="' + escapeHtml(f.fileId) + '" title="Delete">' + icon('trash') + '</button>' : '') +
     '</figure>'
   );
 }
 
-function docRow(f, canDelete) {
+function docRow(f, idx, canDelete, showContext) {
   return (
     '<div class="doc-row" data-file-id="' + escapeHtml(f.fileId) + '">' +
     icon('doc', 'doc-row__icon') +
     '  <div class="doc-row__info"><strong>' + escapeHtml(f.fileName) + '</strong>' +
-    '    <span class="muted small">' + formatBytes(f.sizeBytes) + ' &middot; ' + formatDate(f.uploadDate) + ' &middot; ' + escapeHtml(f.uploadedBy) + '</span></div>' +
+    (showContext
+      ? '<span class="muted small">Project: <b class="mono">' + escapeHtml(f.projectId) + '</b> &middot; ' + escapeHtml(f.contractorName || '') + ' &middot; ' + escapeHtml(f.category) + ' &middot; ' + formatDate(f.uploadDate) + '</span>'
+      : '<span class="muted small">' + formatBytes(f.sizeBytes) + ' &middot; ' + formatDate(f.uploadDate) + ' &middot; ' + escapeHtml(f.uploadedBy || '') + '</span>') +
+    '  </div>' +
+    '  <button class="icon-btn" data-quickview-idx="' + idx + '" title="Quick View">' + icon('image') + '</button>' +
     '  <button class="icon-btn" data-download-id="' + escapeHtml(f.fileId) + '" data-download-name="' + escapeHtml(f.fileName) + '" title="Download">' + icon('download') + '</button>' +
     (canDelete ? '<button class="icon-btn" data-delete-id="' + escapeHtml(f.fileId) + '" title="Delete">' + icon('trash') + '</button>' : '') +
     '</div>'
   );
 }
 
-function wireGalleryLazyThumbs(images) {
+function wireGalleryLazyThumbs() {
   var tiles = document.querySelectorAll('.gallery-tile');
   if (!tiles.length) return;
 
@@ -576,23 +731,27 @@ function wireGalleryLazyThumbs(images) {
   tiles.forEach(function (t) { observer.observe(t); });
 }
 
-function wireGalleryClicks(images) {
-  document.querySelectorAll('.gallery-tile').forEach(function (tile) {
+/** গ্যালারি টাইল এবং doc-row-এর "Quick View" বাটন — দুটোই একই combined ফাইল-লিস্টের
+ *  ভেতর Quick View মোডাল খোলে, যাতে Prev/Next দিয়ে পুরো result set-এর মধ্যে ব্রাউজ করা যায়। */
+function wireQuickViewClicks(area, allFiles) {
+  area.querySelectorAll('.gallery-tile').forEach(function (tile) {
     tile.addEventListener('click', function (e) {
       if (e.target.closest('.gallery-tile__delete')) return;
-      var idx = Number(tile.getAttribute('data-idx'));
-      openLightbox(images, idx);
+      openQuickView(allFiles, Number(tile.getAttribute('data-idx')));
     });
+  });
+  area.querySelectorAll('[data-quickview-idx]').forEach(function (btn) {
+    btn.addEventListener('click', function () { openQuickView(allFiles, Number(btn.getAttribute('data-quickview-idx'))); });
   });
 }
 
-function wireDeleteButtons(area, filters) {
+function wireDeleteButtons(area, onDeleted) {
   area.querySelectorAll('[data-delete-id]').forEach(function (btn) {
     btn.addEventListener('click', function (e) {
       e.stopPropagation();
       if (!confirm('এই ফাইলটি মুছে ফেলতে চান?')) return;
       Api.post('deleteFile', { fileId: btn.getAttribute('data-delete-id') })
-        .then(function () { Toast.success('ফাইল মুছে ফেলা হয়েছে'); loadFileArea(filters, true); })
+        .then(function () { Toast.success('ফাইল মুছে ফেলা হয়েছে'); if (onDeleted) onDeleted(); })
         .catch(function (err) { Toast.error(err.message); });
     });
   });
@@ -600,7 +759,8 @@ function wireDeleteButtons(area, filters) {
 
 function wireDownloadButtons(area) {
   area.querySelectorAll('[data-download-id]').forEach(function (btn) {
-    btn.addEventListener('click', function () {
+    btn.addEventListener('click', function (e) {
+      e.stopPropagation();
       var fileId = btn.getAttribute('data-download-id');
       var name = btn.getAttribute('data-download-name');
       btn.disabled = true;
@@ -614,9 +774,9 @@ function wireDownloadButtons(area) {
   });
 }
 
-/* --------------------------------- Lightbox ----------------------------------- */
+/* --------------------------------- Quick View (image / PDF / doc) ----------------------------------- */
 
-function openLightbox(images, idx) {
+function openQuickView(items, idx) {
   var node = el(
     '<div class="lightbox">' +
     '  <button class="icon-btn lightbox__close">' + icon('close') + '</button>' +
@@ -630,16 +790,56 @@ function openLightbox(images, idx) {
   document.body.style.overflow = 'hidden';
 
   function close() { node.remove(); document.body.style.overflow = ''; }
+
   function show(i) {
-    idx = (i + images.length) % images.length;
-    var f = images[idx];
-    node.querySelector('.lightbox__stage').innerHTML = '<div class="spinner"></div>';
+    idx = (i + items.length) % items.length;
+    var f = items[idx];
+    var stage = node.querySelector('.lightbox__stage');
+    stage.innerHTML = '<div class="spinner"></div>';
     node.querySelector('.lightbox__caption').innerHTML =
-      '<strong>' + escapeHtml(f.fileName) + '</strong><span class="mono">' + formatDate(f.uploadDate) + ' · ' + escapeHtml(f.contractorName) + ' · ' + escapeHtml(f.projectId) + '</span>';
+      '<strong>' + escapeHtml(f.fileName) + '</strong>' +
+      '<span class="mono">' + formatDate(f.uploadDate) + ' · ' + escapeHtml(f.contractorName || '') + ' · ' + escapeHtml(f.projectId || '') + (f.category ? ' · ' + escapeHtml(f.category) : '') + '</span>' +
+      '<a class="btn btn--ghost btn--sm lightbox__dl" data-dl-id="' + escapeHtml(f.fileId) + '" data-dl-name="' + escapeHtml(f.fileName) + '">' + icon('download') + ' Download' + (f.isPdf ? ' PDF' : '') + '</a>';
+
+    // অফিস ডকুমেন্ট (doc/docx/xls/xlsx) ব্রাউজারে সরাসরি প্রিভিউ করা সম্ভব না —
+    // তাই সরাসরি "Preview not available, download করুন" দেখানো হয়, ফালতু নেটওয়ার্ক কল না করে।
+    if (!f.isImage && !f.isPdf) {
+      stage.innerHTML = '<div class="lightbox__nopreview">' + icon('doc') + '<p>Preview not available for this file type.</p><p class="muted small">ডাউনলোড করে দেখুন।</p></div>';
+      wireLightboxDownload(node);
+      return;
+    }
+
     Api.get('getFileContent', { fileId: f.fileId }).then(function (res) {
-      node.querySelector('.lightbox__stage').innerHTML = '<img src="data:' + res.mimeType + ';base64,' + res.base64 + '">';
+      if (f.isPdf) {
+        stage.innerHTML =
+          '<iframe class="lightbox__pdf" src="data:application/pdf;base64,' + res.base64 + '"></iframe>' +
+          '<p class="lightbox__pdf-hint muted small">PDF দেখা না গেলে উপরের Download বাটন ব্যবহার করুন।</p>';
+      } else {
+        stage.innerHTML = '<img class="lightbox__img" src="data:' + res.mimeType + ';base64,' + res.base64 + '">';
+        stage.querySelector('.lightbox__img').addEventListener('click', function (img) {
+          return function () { img.classList.toggle('lightbox__img--zoomed'); };
+        }(stage.querySelector('.lightbox__img')));
+      }
+      wireLightboxDownload(node);
+    }).catch(function (err) {
+      stage.innerHTML = '<div class="lightbox__nopreview">' + icon('doc') + '<p>' + escapeHtml(err.message) + '</p></div>';
     });
   }
+
+  function wireLightboxDownload(scopeNode) {
+    var dl = scopeNode.querySelector('.lightbox__dl');
+    if (!dl) return;
+    dl.addEventListener('click', function (e) {
+      e.preventDefault();
+      Api.get('getFileContent', { fileId: dl.getAttribute('data-dl-id') }).then(function (res) {
+        var link = document.createElement('a');
+        link.href = 'data:' + res.mimeType + ';base64,' + res.base64;
+        link.download = dl.getAttribute('data-dl-name');
+        link.click();
+      }).catch(function (err) { Toast.error(err.message); });
+    });
+  }
+
   node.querySelector('.lightbox__close').addEventListener('click', close);
   node.querySelector('.lightbox__prev').addEventListener('click', function () { show(idx - 1); });
   node.querySelector('.lightbox__next').addEventListener('click', function () { show(idx + 1); });
@@ -655,32 +855,158 @@ function openLightbox(images, idx) {
 
 function viewSearch(query) {
   mount(
-    '<section class="section-head"><h1>Search</h1></section>' +
-    '<form id="search-form" class="toolbar"><input type="text" name="q" id="search-q" placeholder="Contractor, Project ID, file name..." value="' + escapeHtml(query || '') + '"><button class="btn btn--primary btn--sm">' + icon('search') + ' Search</button></form>' +
-    '<div id="search-results"></div>'
+    '<section class="section-head"><h1>🔎 Search Projects, Contractors &amp; Documents</h1></section>' +
+    '<form id="search-form" class="search-hero">' +
+    '  <input type="text" name="q" id="search-q" placeholder="Search Project ID, Contractor, Category or File Name..." value="' + escapeHtml(query || '') + '" autocomplete="off">' +
+    '  <button type="submit" class="btn btn--primary">' + icon('search') + ' Search</button>' +
+    '</form>' +
+    '<div id="global-results"></div>' +
+    renderAdvancedSearchPanelHtml() +
+    '<div id="advanced-results"></div>'
   );
+
   document.getElementById('search-form').addEventListener('submit', function (e) {
     e.preventDefault();
     var q = document.getElementById('search-q').value.trim();
-    location.hash = '#/search/' + encodeURIComponent(q);
+    if (q) location.hash = '#/search/' + encodeURIComponent(q);
   });
-  if (!query) return;
-  var results = document.getElementById('search-results');
-  results.innerHTML = loadingHtml('খোঁজা হচ্ছে...');
-  Api.get('listFiles', { search: query }).then(function (files) {
-    if (!files.length) { results.innerHTML = '<div class="empty-state"><p>"' + escapeHtml(query) + '" এর জন্য কোনো ফলাফল পাওয়া যায়নি।</p></div>'; return; }
+  document.getElementById('search-q').addEventListener('input', debounce(function () {
+    var q = document.getElementById('search-q').value.trim();
+    if (q.length >= 2) { history.replaceState(null, '', '#/search/' + encodeURIComponent(q)); runGlobalSearch(q); }
+    else document.getElementById('global-results').innerHTML = '';
+  }, 350));
+
+  wireAdvancedSearchPanel();
+
+  if (query) runGlobalSearch(query);
+}
+
+function runGlobalSearch(query) {
+  var box = document.getElementById('global-results');
+  box.innerHTML = loadingHtml('⏳ Searching...');
+  Api.get('globalSearch', { q: query }).then(function (res) {
+    var total = res.projects.length + res.files.length;
+    if (!total) {
+      box.innerHTML = emptyStateHtml('🔍 No Results Found', 'We couldn\u2019t find any project or document matching "' + query + '". Try another Project ID, Contractor or Document Name.');
+      return;
+    }
+    var canDelete = Auth.isAdmin();
+    var html = '<p class="muted">' + total + ' result' + (total === 1 ? '' : 's') + ' found for "' + escapeHtml(query) + '"</p>';
+    if (res.projects.length) {
+      html += '<h3 class="results-subhead">Projects (' + res.projects.length + ')</h3><div class="project-grid">' + res.projects.map(searchProjectCard).join('') + '</div>';
+    }
+    if (res.files.length) {
+      var images = res.files.filter(function (f) { return f.isImage; });
+      var docs = res.files.filter(function (f) { return !f.isImage; });
+      html += '<h3 class="results-subhead">Files (' + res.files.length + ')</h3>' +
+        (images.length ? '<div class="gallery-grid">' + images.map(function (f) { return galleryTile(f, res.files.indexOf(f), canDelete, true); }).join('') + '</div>' : '') +
+        (docs.length ? '<div class="doc-list">' + docs.map(function (f) { return docRow(f, res.files.indexOf(f), canDelete, true); }).join('') + '</div>' : '');
+    }
+    box.innerHTML = html;
+    wireGalleryLazyThumbs();
+    wireQuickViewClicks(box, res.files);
+    wireDeleteButtons(box, function () { runGlobalSearch(query); });
+    wireDownloadButtons(box);
+  }).catch(function (err) { box.innerHTML = errorStateHtml(err.message); });
+}
+
+function searchProjectCard(p) {
+  var statusCls = p.status === 'Archived' ? 'badge--muted' : 'badge--active';
+  return (
+    '<a class="project-badge" href="#/project/' + encodeURIComponent(p.projectId) + '">' +
+    '  <span class="project-badge__id mono">' + escapeHtml(p.projectId) + '</span>' +
+    '  <span class="project-badge__name">' + escapeHtml(p.projectName) + '</span>' +
+    '  <span class="project-badge__meta">' + escapeHtml(p.contractorName) + ' · ' + p.fileCount + ' files</span>' +
+    '  <span class="badge ' + statusCls + '">' + escapeHtml(p.status) + '</span>' +
+    '  <span class="project-badge__cta">Open Project →</span>' +
+    '</a>'
+  );
+}
+
+/* ------------------------------ Advanced (multi-criteria) search --------------- */
+
+function renderAdvancedSearchPanelHtml() {
+  return (
+    '<section class="adv-search">' +
+    '  <h3 class="results-subhead">Advanced Search</h3>' +
+    '  <div class="adv-search__grid">' +
+    '    <div class="adv-field"><label>Contractor</label><select id="adv-contractor"><option value="">All Contractors</option></select></div>' +
+    '    <div class="adv-field"><label>Project ID</label><div id="adv-project-select"></div></div>' +
+    '    <div class="adv-field"><label>Category</label><select id="adv-category"><option value="">All Categories</option>' +
+    window.APP_CONFIG.CATEGORIES.map(function (c) { return '<option value="' + escapeHtml(c.key) + '">' + escapeHtml(c.label) + '</option>'; }).join('') +
+    '    </select></div>' +
+    '    <div class="adv-field"><label>File Type</label><select id="adv-filetype"><option value="">All Types</option><option value="jpg">Image (JPG)</option><option value="png">Image (PNG)</option><option value="webp">Image (WEBP)</option><option value="pdf">PDF</option><option value="docx">DOCX</option><option value="xlsx">XLSX</option></select></div>' +
+    '    <div class="adv-field"><label>Date From</label><input type="date" id="adv-from"></div>' +
+    '    <div class="adv-field"><label>Date To</label><input type="date" id="adv-to"></div>' +
+    '  </div>' +
+    '  <div class="btn-row"><button class="btn btn--primary btn--sm" id="adv-search-btn">' + icon('search') + ' SEARCH</button><button class="btn btn--ghost btn--sm" id="adv-reset-btn">' + icon('refresh') + ' RESET</button></div>' +
+    '</section>'
+  );
+}
+
+function wireAdvancedSearchPanel() {
+  var contractorSel = document.getElementById('adv-contractor');
+  var projectSelectContainer = document.getElementById('adv-project-select');
+  var selectedProjectId = '';
+  var projectCombo = mountSearchableSelect(projectSelectContainer, [], {
+    placeholder: 'Any Project ID',
+    onSelect: function (value) { selectedProjectId = value; },
+    onClear: function () { selectedProjectId = ''; }
+  });
+
+  ensureSearchIndexLoaded().then(function () {
+    contractorSel.innerHTML = '<option value="">All Contractors</option>' +
+      State.allContractors.map(function (c) { return '<option value="' + escapeHtml(c.contractorId) + '">' + escapeHtml(c.contractorName) + '</option>'; }).join('');
+    projectCombo.setOptions(projectOptionsFor(''));
+  }).catch(function () { /* index লোড ব্যর্থ হলেও বাকি ফিল্টার কাজ করবে */ });
+
+  function projectOptionsFor(contractorId) {
+    var list = !contractorId ? State.allProjects : State.allProjects.filter(function (p) { return p.contractorId === contractorId; });
+    return (list || []).map(function (p) { return { value: p.projectId, label: p.projectId, sublabel: p.projectName + ' · ' + p.contractorName }; });
+  }
+
+  contractorSel.addEventListener('change', function () {
+    selectedProjectId = '';
+    projectCombo.clear();
+    projectCombo.setOptions(projectOptionsFor(contractorSel.value));
+  });
+
+  document.getElementById('adv-search-btn').addEventListener('click', function () {
+    runAdvancedSearch({
+      contractorId: contractorSel.value,
+      projectId: selectedProjectId,
+      category: document.getElementById('adv-category').value,
+      fileType: document.getElementById('adv-filetype').value,
+      dateFrom: document.getElementById('adv-from').value,
+      dateTo: document.getElementById('adv-to').value
+    });
+  });
+  document.getElementById('adv-reset-btn').addEventListener('click', function () {
+    contractorSel.value = ''; selectedProjectId = ''; projectCombo.clear(); projectCombo.setOptions(projectOptionsFor(''));
+    document.getElementById('adv-category').value = '';
+    document.getElementById('adv-filetype').value = '';
+    document.getElementById('adv-from').value = '';
+    document.getElementById('adv-to').value = '';
+    document.getElementById('advanced-results').innerHTML = '';
+  });
+}
+
+function runAdvancedSearch(filters) {
+  var box = document.getElementById('advanced-results');
+  box.innerHTML = loadingHtml('⏳ Searching...');
+  Api.get('listFiles', filters).then(function (files) {
+    if (!files.length) { box.innerHTML = emptyStateHtml('🔍 No Results Found', 'Try different filters, or Reset and start again.'); return; }
     var canDelete = Auth.isAdmin();
     var images = files.filter(function (f) { return f.isImage; });
     var docs = files.filter(function (f) { return !f.isImage; });
-    results.innerHTML =
-      '<p class="muted">' + files.length + ' ফলাফল পাওয়া গেছে</p>' +
-      (images.length ? '<div class="gallery-grid">' + images.map(function (f, i) { return galleryTile(f, i, canDelete); }).join('') + '</div>' : '') +
-      (docs.length ? '<div class="doc-list">' + docs.map(function (f) { return docRow(f, canDelete); }).join('') + '</div>' : '');
-    wireGalleryLazyThumbs(images);
-    wireGalleryClicks(images);
-    wireDeleteButtons(results, { search: query });
-    wireDownloadButtons(results);
-  }).catch(function (err) { results.innerHTML = errorHtml(err.message); });
+    box.innerHTML = '<p class="muted">' + files.length + ' file(s) found</p>' +
+      (images.length ? '<div class="gallery-grid">' + images.map(function (f) { return galleryTile(f, files.indexOf(f), canDelete, true); }).join('') + '</div>' : '') +
+      (docs.length ? '<div class="doc-list">' + docs.map(function (f) { return docRow(f, files.indexOf(f), canDelete, true); }).join('') + '</div>' : '');
+    wireGalleryLazyThumbs();
+    wireQuickViewClicks(box, files);
+    wireDeleteButtons(box, function () { runAdvancedSearch(filters); });
+    wireDownloadButtons(box);
+  }).catch(function (err) { box.innerHTML = errorStateHtml(err.message); });
 }
 
 /* ---------------------------------- Admin -------------------------------------- */
@@ -716,8 +1042,8 @@ function adminDashboardTab() {
   Api.get('dashboardStats', {}).then(function (s) {
     box.innerHTML =
       '<section class="stat-strip">' +
-      statCard(s.totalContractors, 'Contractors') + statCard(s.totalProjects, 'Projects') +
-      statCard(s.totalPhotos, 'Photos') + statCard(s.totalDocuments, 'Documents') + statCard(s.todaysUploads, "Today's Uploads") +
+      statCard('building', s.totalContractors, 'Contractors') + statCard('doc', s.totalProjects, 'Projects') +
+      statCard('camera', s.totalPhotos, 'Photos') + statCard('doc', s.totalDocuments, 'Documents') + statCard('upload', s.todaysUploads, "Today's Uploads") +
       '</section>' +
       '<table class="data-table"><thead><tr><th>Contractor</th><th>Projects</th><th>Photos</th><th>Documents</th></tr></thead><tbody>' +
       s.contractorStats.map(function (c) { return '<tr><td>' + escapeHtml(c.contractorName) + '</td><td>' + c.projects + '</td><td>' + c.photos + '</td><td>' + c.documents + '</td></tr>'; }).join('') +
@@ -935,5 +1261,6 @@ function adminSettingsTab() {
 window.addEventListener('DOMContentLoaded', function () {
   renderShell();
   router();
+  ensureSearchIndexLoaded().catch(function () { /* প্রথম চেষ্টা ব্যর্থ হলে wireHeaderSuggestions আবার চেষ্টা করবে */ });
 });
 window.addEventListener('hashchange', router);

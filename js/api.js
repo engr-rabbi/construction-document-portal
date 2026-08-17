@@ -40,32 +40,13 @@ var Api = (function () {
 
   return {
     get: function (action, params) { return call(action, params, 'GET'); },
-    post: function (action, params) { return call(action, params, 'POST'); },
-    /** fetch() দিয়ে upload progress পাওয়া যায় না, তাই বড় ফাইল আপলোডে (উপরে % দেখানোর জন্য)
-     *  XMLHttpRequest ব্যবহার করা হয়। বাকি সব ছোট কলে সাধারণ fetch-ই যথেষ্ট। */
-    postWithProgress: function (action, params, onProgress) {
-      params = params || {};
-      params.action = action;
-      params.token = token();
-      return new Promise(function (resolve, reject) {
-        var xhr = new XMLHttpRequest();
-        xhr.open('POST', window.APP_CONFIG.WEB_APP_URL, true);
-        xhr.setRequestHeader('Content-Type', 'text/plain;charset=utf-8');
-        if (xhr.upload && onProgress) {
-          xhr.upload.onprogress = function (e) {
-            if (e.lengthComputable) onProgress(Math.round((e.loaded / e.total) * 100));
-          };
-        }
-        xhr.onload = function () {
-          try {
-            var res = JSON.parse(xhr.responseText);
-            if (!res.ok) return reject(new Error(res.error || 'Unknown error'));
-            resolve(res.data);
-          } catch (e) { reject(new Error('Invalid response from server')); }
-        };
-        xhr.onerror = function () { reject(new Error('Network error')); };
-        xhr.send(JSON.stringify(params));
-      });
-    }
+    post: function (action, params) { return call(action, params, 'POST'); }
+    // দ্রষ্টব্য: এখানে ইচ্ছাকৃতভাবে কোনো "postWithProgress" (xhr.upload.onprogress-ভিত্তিক)
+    // ফাংশন নেই। কারণ: xhr.upload-এ কোনো progress listener লাগানো মাত্র ব্রাউজার সেই
+    // request-কে আর "simple/CORS-preflight-free" request হিসেবে গণ্য করে না — একটা
+    // OPTIONS preflight request পাঠায়। Apps Script Web App-এর কোনো doOptions() নেই এবং
+    // preflight handle করতে পারে না, ফলে পুরো upload ব্যর্থ হয়ে "Network error" দেখায়।
+    // তাই real byte-level progress দেখানো এই architecture-এ সম্ভব না — app.js-এ তাই
+    // upload-এর সময় একটা simulated/animated progress bar ব্যবহার করা হয়েছে।
   };
 })();
