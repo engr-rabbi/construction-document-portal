@@ -1312,7 +1312,36 @@ window.onSessionExpired = function () {
   openLoginModal();
 };
 
+/**
+ * checkAppConfig_ — deploy করার সময় সবচেয়ে সাধারণ ভুল হলো config.js-এ
+ * WEB_APP_URL আপডেট করতে ভুলে যাওয়া (placeholder থেকে যায়)। আগে এই অবস্থায়
+ * পুরো পেজ চুপচাপ blank থেকে যেত — শুধু browser console-এ CORS/404 error
+ * দেখাত, যেটা খুঁজে বের করা কঠিন। এখন এটা সরাসরি পেজেই স্পষ্টভাবে দেখানো হয়।
+ */
+function checkAppConfig_() {
+  var url = (window.APP_CONFIG && window.APP_CONFIG.WEB_APP_URL) || '';
+  var looksValid = /^https:\/\/script\.google\.com\/macros\/s\/[A-Za-z0-9_-]{20,}\/exec$/.test(url);
+  if (looksValid) return true;
+
+  document.getElementById('shell').innerHTML =
+    '<div class="config-warning">' +
+    '  <h1>⚠️ Setup Incomplete</h1>' +
+    '  <p><code>frontend/js/config.js</code> ফাইলে এখনো সঠিক <strong>WEB_APP_URL</strong> বসানো হয়নি ' +
+    '  (এখনো placeholder আছে, অথবা ভুল ফরম্যাটে আছে)। এই কারণে পুরো পেজ খালি দেখাচ্ছে।</p>' +
+    '  <ol>' +
+    '    <li>Google Apps Script Editor-এ <strong>Deploy → Manage deployments</strong> খুলুন</li>' +
+    '    <li>বিদ্যমান deployment-এর <strong>Web app URL</strong> কপি করুন (নতুন deployment তৈরি করবেন না — এতে URL বদলে যায়)</li>' +
+    '    <li><code>frontend/js/config.js</code>-এ <strong>WEB_APP_URL</strong>-এর মান বদলে এই URL বসান</li>' +
+    '    <li>GitHub-এ ফাইলটা commit/push করুন</li>' +
+    '    <li>এই পেজ hard refresh করুন (Ctrl+Shift+R / Cmd+Shift+R)</li>' +
+    '  </ol>' +
+    '  <p class="muted small">বিস্তারিত নির্দেশনা README.md-এর "Phase 3 ও 4" অংশে আছে।</p>' +
+    '</div>';
+  return false;
+}
+
 window.addEventListener('DOMContentLoaded', function () {
+  if (!checkAppConfig_()) return;
   renderShell();
   router();
   ensureSearchIndexLoaded().catch(function () { /* প্রথম চেষ্টা ব্যর্থ হলে wireHeaderSuggestions আবার চেষ্টা করবে */ });

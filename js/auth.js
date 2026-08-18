@@ -37,13 +37,18 @@ var Auth = (function () {
 
   /** Google Identity Services লোড হওয়ার পর বাটন রেন্ডার করে */
   function renderSignInButton(containerEl, onLoggedIn) {
+    var clientId = window.APP_CONFIG.GOOGLE_CLIENT_ID || '';
+    if (!clientId || clientId.indexOf('PASTE_YOUR_CLIENT_ID') !== -1) {
+      containerEl.innerHTML = '<p class="muted small">⚠️ config.js-এ GOOGLE_CLIENT_ID এখনো সেট করা হয়নি — README-এর Phase 2 দেখুন।</p>';
+      return;
+    }
     if (!window.google || !google.accounts) {
       containerEl.innerHTML = '<p class="muted">Google Sign-In লোড হচ্ছে...</p>';
       setTimeout(function () { renderSignInButton(containerEl, onLoggedIn); }, 500);
       return;
     }
     google.accounts.id.initialize({
-      client_id: window.APP_CONFIG.GOOGLE_CLIENT_ID,
+      client_id: clientId,
       callback: function (response) {
         Api.post('login', { idToken: response.credential })
           .then(function (data) {
