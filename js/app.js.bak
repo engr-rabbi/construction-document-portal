@@ -96,55 +96,23 @@ function mountSearchableSelect(containerEl, options, config) {
 function renderShell() {
   var user = Auth.getUser();
   var shell = document.getElementById('shell');
-  var isStaff = user.role === 'admin' || user.role === 'moderator';
-  var adminLinks = isStaff
-    ? '<div class="side-nav__label">ADMINISTRATION</div>' +
-      '<a href="#/admin/dashboard" class="side-link" data-nav="admin">' + icon('users') + '<span>User Management</span></a>' +
-      '<a href="#/admin/settings" class="side-link" data-nav="admin">' + icon('gear') + '<span>System Settings</span></a>'
-    : '';
-
   shell.innerHTML =
-    '<header class="topbar topbar--premium">' +
-    '  <div class="topbar__inner topbar__inner--premium">' +
-    '    <button class="mobile-menu-btn icon-btn" id="mobile-menu-btn" aria-label="Open navigation">' + icon('menu') + '</button>' +
-    '    <a href="#/" class="brand brand--premium">' +
-    '      <span class="brand__mark brand__mark--logo">CDP</span>' +
-    '      <span class="brand__copy"><strong>Construction Document</strong><small>Portal</small></span>' +
-    '    </a>' +
-    '    <form id="global-search" class="topbar__search topbar__search--premium">' +
-    '      ' + icon('search') + '<input type="text" id="global-search-input" name="q" placeholder="Search projects, contractors, documents..." autocomplete="off">' +
-    '      <span class="search-shortcut">Ctrl + K</span>' +
+    '<header class="topbar">' +
+    '  <div class="topbar__inner">' +
+    '    <a href="#/" class="brand"><span class="brand__mark">CDP</span><span class="brand__name">' + escapeHtml(window.APP_CONFIG.APP_NAME) + '</span></a>' +
+    '    <form id="global-search" class="topbar__search">' +
+    '      <input type="text" id="global-search-input" name="q" placeholder="Search Project ID, Contractor or Document..." autocomplete="off">' +
+    '      <button type="submit" aria-label="Search">' + icon('search') + '</button>' +
     '      <div id="global-search-menu" class="ss__menu ss__menu--dark" hidden></div>' +
     '    </form>' +
-    '    <nav class="topbar__actions">' +
-    '      <button class="top-action top-action--new" id="top-new-btn" title="New Project">' + icon('plus') + '<span>New</span></button>' +
-    '      <button class="top-action" title="Notifications" aria-label="Notifications">' + icon('bell') + '<span class="notification-dot">5</span></button>' +
-    '      <button class="top-action" id="theme-btn" title="Theme" aria-label="Theme">' + icon('sun') + '</button>' +
+    '    <nav class="topbar__nav">' +
+    ((user.role === 'admin' || user.role === 'moderator') ? '<a href="#/admin/dashboard" class="navlink">' + icon('gear') + '<span>Admin</span></a>' : '') +
+    (user.role === 'contractor' ? '<a href="#/contractor/' + encodeURIComponent(user.contractorId) + '" class="navlink">' + icon('doc') + '<span>My Projects</span></a>' : '') +
     '      <div id="user-slot"></div>' +
     '    </nav>' +
     '  </div>' +
     '</header>' +
-    '<div class="app-layout">' +
-    '  <aside class="sidebar" id="sidebar">' +
-    '    <div class="sidebar__nav">' +
-    '      <a href="#/" class="side-link" data-nav="dashboard">' + icon('grid') + '<span>Dashboard</span></a>' +
-    '      <a href="#/search" class="side-link" data-nav="search">' + icon('search') + '<span>Search</span></a>' +
-    '      <a href="#/search/projects" class="side-link" data-nav="projects">' + icon('building') + '<span>Projects</span></a>' +
-    '      <a href="#/contractors" class="side-link" data-nav="contractors">' + icon('users') + '<span>Contractors</span></a>' +
-    '      <a href="#/search/documents" class="side-link" data-nav="documents">' + icon('doc') + '<span>Documents</span></a>' +
-    '      <a href="#/search/photos" class="side-link" data-nav="photos">' + icon('camera') + '<span>Photos</span></a>' +
-    '      <a href="#/search/categories" class="side-link" data-nav="categories">' + icon('grid') + '<span>Project Category</span></a>' +
-    adminLinks +
-    '    </div>' +
-    '    <div class="system-status">' +
-    '      <strong>System Status</strong>' +
-    '      <span class="status-online"><i></i> Online</span>' +
-    '      <small>Connected to live data</small>' +
-    '    </div>' +
-    '  </aside>' +
-    '  <main id="view" class="view"></main>' +
-    '</div>' +
-    '<div class="sidebar-backdrop" id="sidebar-backdrop"></div>' +
+    '<main id="view" class="view"></main>' +
     '<div id="modal-root"></div>';
 
   document.getElementById('global-search').addEventListener('submit', function (e) {
@@ -153,39 +121,8 @@ function renderShell() {
     if (q) location.hash = '#/search/' + encodeURIComponent(q);
   });
   wireHeaderSuggestions();
+
   renderUserSlot();
-
-  var newBtn = document.getElementById('top-new-btn');
-  if (newBtn) newBtn.addEventListener('click', function () {
-    if (isStaff) openNewSystemModal();
-    else location.hash = '#/search';
-  });
-  var themeBtn = document.getElementById('theme-btn');
-  if (themeBtn) themeBtn.addEventListener('click', function () {
-    document.documentElement.classList.toggle('theme-soft');
-    try { localStorage.setItem('cdp-theme-soft', document.documentElement.classList.contains('theme-soft') ? '1' : '0'); } catch (e) {}
-  });
-  try { if (localStorage.getItem('cdp-theme-soft') === '1') document.documentElement.classList.add('theme-soft'); } catch (e) {}
-
-  var mobileBtn = document.getElementById('mobile-menu-btn');
-  var backdrop = document.getElementById('sidebar-backdrop');
-  function closeSide() { document.body.classList.remove('sidebar-open'); }
-  if (mobileBtn) mobileBtn.addEventListener('click', function () { document.body.classList.toggle('sidebar-open'); });
-  if (backdrop) backdrop.addEventListener('click', closeSide);
-  document.querySelectorAll('.side-link').forEach(function (a) { a.addEventListener('click', closeSide); });
-  updateActiveSideNav();
-}
-
-function updateActiveSideNav() {
-  var hash = location.hash || '#/';
-  var key = hash === '#/' ? 'dashboard' :
-    hash.indexOf('#/contractors') === 0 ? 'contractors' :
-    hash.indexOf('#/project/') === 0 ? 'projects' :
-    hash.indexOf('#/admin') === 0 ? 'admin' :
-    hash.indexOf('#/search') === 0 ? 'search' : 'dashboard';
-  document.querySelectorAll('.side-link').forEach(function (a) {
-    a.classList.toggle('side-link--active', a.getAttribute('data-nav') === key);
-  });
 }
 
 function wireHeaderSuggestions() {
@@ -288,7 +225,6 @@ var Modal = (function () {
 var ROUTES = [
   { re: /^#\/$/, fn: viewHome },
   { re: /^#\/search(?:\/(.*))?$/, fn: viewSearch },
-  { re: /^#\/contractors$/, fn: viewContractors },
   { re: /^#\/contractor\/([^\/]+)$/, fn: viewContractor },
   { re: /^#\/project\/([^\/]+)\/([^\/]+)$/, fn: viewCategory },
   { re: /^#\/project\/([^\/]+)$/, fn: viewProject },
@@ -309,13 +245,9 @@ function router() {
   viewHome();
 }
 
-function mount(html, mode) {
-  var view = document.getElementById('view');
-  view.classList.remove('dashboard-view', 'wide-view');
-  if (mode) view.classList.add(mode + '-view');
-  view.innerHTML = html;
-  updateActiveSideNav();
-  view.scrollIntoView({ behavior: 'instant', block: 'start' });
+function mount(html) {
+  document.getElementById('view').innerHTML = html;
+  document.getElementById('view').scrollIntoView({ behavior: 'instant', block: 'start' });
 }
 
 function loadingHtml(label) {
@@ -335,121 +267,44 @@ function errorHtml(message) { return errorStateHtml(message); }
 /* ---------------------------------- Home ------------------------------------ */
 
 function viewHome() {
-  mount(loadingHtml('ড্যাশবোর্ড লোড হচ্ছে...'), 'dashboard');
+  mount(loadingHtml('ড্যাশবোর্ড লোড হচ্ছে...'));
   Promise.all([Api.get('dashboardStats', {}), ensureSearchIndexLoaded()])
     .then(function (res) {
-      var stats = res[0] || {};
-      var contractors = State.allContractors || [];
-      var projects = State.allProjects || [];
+      var stats = res[0];
+      var contractors = State.allContractors;
       var user = Auth.getUser();
-      var statusMap = {};
-      projects.forEach(function (p) {
-        var status = p.status || 'Unknown';
-        statusMap[status] = (statusMap[status] || 0) + 1;
-      });
-      var statusEntries = Object.keys(statusMap).sort(function (a,b) { return statusMap[b] - statusMap[a]; }).slice(0, 5);
-      var recentProjects = projects.slice(0, 6);
-      var activeProjects = projects.filter(function (p) { return /active|ongoing|progress/i.test(p.status || ''); }).length;
-      var completedProjects = projects.filter(function (p) { return /complete|completed/i.test(p.status || ''); }).length;
-      if (!activeProjects && stats.totalProjects) activeProjects = Math.max(0, Number(stats.totalProjects) - completedProjects);
-
-      var html =
-        '<div class="dashboard-shell">' +
-        '  <section class="dashboard-welcome">' +
-        '    <div><span class="dashboard-kicker">CONSTRUCTION INTELLIGENCE PLATFORM</span><h1>Good morning, ' + escapeHtml(user.name || 'Admin') + '! <span>👋</span></h1><p>Here’s what’s happening with your construction projects today.</p></div>' +
-        '    <div class="dashboard-actions">' +
-        '      <button class="dash-btn dash-btn--green" id="dash-upload-btn">' + icon('upload') + ' Upload Document</button>' +
-        '      <button class="dash-btn dash-btn--blue" id="dash-add-btn">' + icon('plus') + ' Add Project</button>' +
-        '      <button class="dash-btn dash-btn--light" id="dash-search-btn">' + icon('search') + ' Quick Search</button>' +
-        '    </div>' +
-        '  </section>' +
-        '  <section class="kpi-grid">' +
-          dashboardKpi('building', stats.totalProjects, 'Total Projects', 'blue', 'Projects in portal') +
-          dashboardKpi('activity', activeProjects, 'Active Projects', 'green', 'Currently in progress') +
-          dashboardKpi('check', completedProjects, 'Completed Projects', 'amber', 'Completed records') +
-          dashboardKpi('users', stats.totalContractors, 'Total Contractors', 'purple', 'Contractor network') +
-          dashboardKpi('doc', stats.totalDocuments, 'Total Documents', 'red', 'Managed documents') +
+      mount(
+        '<section class="hero">' +
+        '  <p class="eyebrow">SITE DOCUMENTATION SYSTEM</p>' +
+        '  <h1>Construction Photo &amp; Document Portal</h1>' +
+        '  <p class="hero__sub">প্রতিটি ঠিকাদার প্রতিষ্ঠানের প্রজেক্ট-ভিত্তিক ছবি ও ডকুমেন্ট এক জায়গায়।</p>' +
         '</section>' +
-        '  <section class="dashboard-grid dashboard-grid--main">' +
-        '    <div class="dashboard-panel quick-panel"><div class="panel-head"><div><h2>Quick Access</h2><p>Frequently used actions</p></div></div><div class="quick-grid">' +
-          quickAccessCard('building','blue','All Projects','View all projects','#/search/projects') +
-          quickAccessCard('users','green','Contractors','Manage contractors','#/contractors') +
-          quickAccessCard('doc','amber','Documents','All documents','#/search/documents') +
-          quickAccessCard('camera','purple','Photos','Project photos','#/search/photos') +
-          quickAccessCard('grid','cyan','Categories','Project categories','#/search/categories') +
-        '</div></div>' +
-        '    <div class="dashboard-panel activity-panel"><div class="panel-head"><div><h2>Management Snapshot</h2><p>Live data overview</p></div><button class="panel-link" id="view-all-search">View All</button></div>' +
-          '<div class="snapshot-list">' +
-            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--blue">' + icon('building') + '</span><div><strong>' + escapeHtml(stats.totalProjects || 0) + ' Projects</strong><small>Available in the live project index</small></div></div>' +
-            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--green">' + icon('users') + '</span><div><strong>' + escapeHtml(stats.totalContractors || 0) + ' Contractors</strong><small>Connected to the project network</small></div></div>' +
-            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--amber">' + icon('upload') + '</span><div><strong>' + escapeHtml(stats.todaysUploads || 0) + ' Today’s Uploads</strong><small>Documents and photos uploaded today</small></div></div>' +
-            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--red">' + icon('doc') + '</span><div><strong>' + escapeHtml(stats.totalDocuments || 0) + ' Documents</strong><small>Available across project records</small></div></div>' +
-          '</div>' +
-        '    </div>' +
-        '  </section>' +
-        '  <section class="dashboard-grid dashboard-grid--status">' +
-        '    <div class="dashboard-panel"><div class="panel-head"><div><h2>Projects at a Glance</h2><p>Overview of current project status</p></div></div><div class="status-grid">' +
-          (statusEntries.length ? statusEntries.map(function (s, i) { return statusCard(s, statusMap[s], i); }).join('') : '<div class="muted">No project status data available.</div>') +
-        '</div></div>' +
-        '    <div class="dashboard-panel contractor-mini-panel"><div class="panel-head"><div><h2>Contractor Network</h2><p>Live contractor coverage</p></div><button class="mini-action" id="open-contractors-btn">' + icon('users') + ' Contractors <span>›</span></button></div><div class="contractor-mini-list">' +
-          contractors.slice(0, 5).map(function (c) { return '<a href="#/contractor/' + encodeURIComponent(c.contractorId) + '" class="contractor-mini"><span class="contractor-avatar">' + escapeHtml((c.contractorName || 'C').charAt(0).toUpperCase()) + '</span><span><strong>' + escapeHtml(c.contractorName) + '</strong><small>' + escapeHtml(c.projectCount || 0) + ' projects · ' + escapeHtml(c.fileCount || 0) + ' files</small></span><span class="contractor-arrow">›</span></a>'; }).join('') +
-          (contractors.length > 5 ? '<button class="more-contractors" id="more-contractors-btn">+' + (contractors.length - 5) + ' more contractors</button>' : '') +
-        '</div></div>' +
-        '  </section>' +
-        '  <section class="project-network-head"><div><h2>Project Network</h2><p>Recent project records from live data</p></div><a href="#/contractors" class="network-button">' + icon('users') + ' Contractors <span>›</span></a></section>' +
-        '  <section class="dashboard-panel recent-projects-panel"><div class="panel-head"><div><h2>Recent Projects</h2><p>Project index overview</p></div><a href="#/search/projects" class="panel-link">View All Projects</a></div>' +
-        '    <div class="responsive-table"><table class="premium-table"><thead><tr><th>Project ID</th><th>Project Name</th><th>Contractor</th><th>Status</th><th>Documents</th><th>Photos</th><th></th></tr></thead><tbody>' +
-          (recentProjects.length ? recentProjects.map(function (p) { return '<tr><td class="mono strong-id">' + escapeHtml(p.projectId) + '</td><td><strong>' + escapeHtml(p.projectName || p.projectId) + '</strong></td><td>' + escapeHtml(p.contractorName || p.contractorId || '—') + '</td><td><span class="status-pill ' + statusClass(p.status) + '">' + escapeHtml(p.status || 'Unknown') + '</span></td><td>' + escapeHtml(p.docCount || 0) + '</td><td>' + escapeHtml(p.photoCount || 0) + '</td><td><a class="row-action" href="#/project/' + encodeURIComponent(p.projectId) + '" aria-label="Open project">›</a></td></tr>'; }).join('') : '<tr><td colspan="7" class="table-empty">No project records available.</td></tr>') +
-        '</tbody></table></div></section>' +
-        '  </div>';
-
-      mount(html, 'dashboard');
-      var uploadBtn = document.getElementById('dash-upload-btn');
-      var addBtn = document.getElementById('dash-add-btn');
-      if (uploadBtn) uploadBtn.addEventListener('click', function () { location.hash = '#/search'; });
-      if (addBtn) {
-        if (user.role === 'public' || user.role === 'contractor') {
-          addBtn.innerHTML = icon('search') + ' Search Projects';
-          addBtn.addEventListener('click', function () { location.hash = '#/search'; });
-        } else {
-          addBtn.addEventListener('click', function () { openNewSystemModal(); });
-        }
+        '<section class="stat-strip">' +
+        statCard('doc', stats.totalProjects, 'Total Projects') +
+        statCard('camera', stats.totalPhotos, 'Total Photos') +
+        statCard('doc', stats.totalDocuments, 'Total Documents') +
+        statCard('building', stats.totalContractors, 'Total Contractors') +
+        statCard('upload', stats.todaysUploads, "Today's Uploads") +
+        '</section>' +
+        '<section class="section-head">' +
+        '  <h2>Contractors</h2>' +
+        '  <div class="btn-row">' +
+        '    <button class="btn btn--ghost btn--sm" id="refresh-home-btn" title="Refresh counts">' + icon('refresh') + '</button>' +
+        ((user.role === 'admin' || user.role === 'moderator') ? '<button class="btn btn--primary btn--sm" id="add-contractor-btn">' + icon('plus') + ' New Contractor</button>' : '') +
+        '  </div>' +
+        '</section>' +
+        '<section class="contractor-grid">' +
+        contractors.map(plateCard).join('') +
+        '</section>'
+      );
+      document.getElementById('refresh-home-btn').addEventListener('click', function () {
+        refreshSearchIndex().then(viewHome).catch(function (err) { Toast.error(err.message); });
+      });
+      if ((user.role === 'admin' || user.role === 'moderator')) {
+        document.getElementById('add-contractor-btn').addEventListener('click', openAddContractorModal);
       }
-      document.getElementById('dash-search-btn').addEventListener('click', function () { document.getElementById('global-search-input').focus(); });
-      document.getElementById('view-all-search').addEventListener('click', function () { location.hash = '#/search'; });
-      document.getElementById('open-contractors-btn').addEventListener('click', function () { location.hash = '#/contractors'; });
-      var more = document.getElementById('more-contractors-btn'); if (more) more.addEventListener('click', function () { location.hash = '#/contractors'; });
     })
-    .catch(function (err) { mount(errorHtml(err.message), 'dashboard'); });
-}
-
-function dashboardKpi(iconName, value, label, tone, meta) {
-  return '<div class="kpi-card kpi-card--' + tone + '"><span class="kpi-icon">' + icon(iconName) + '</span><div class="kpi-copy"><small>' + escapeHtml(label) + '</small><strong>' + escapeHtml(value == null ? 0 : value) + '</strong><span class="kpi-meta">' + escapeHtml(meta) + '</span></div><span class="kpi-spark"><i></i><i></i><i></i><i></i><i></i></span></div>';
-}
-function quickAccessCard(iconName, tone, title, subtitle, href) {
-  return '<a class="quick-card quick-card--' + tone + '" href="' + href + '"><span class="quick-card__icon">' + icon(iconName) + '</span><strong>' + escapeHtml(title) + '</strong><small>' + escapeHtml(subtitle) + '</small></a>';
-}
-function statusCard(label, count, index) {
-  var tones = ['blue','green','amber','purple','red'];
-  var tone = tones[index % tones.length];
-  return '<div class="status-card status-card--' + tone + '"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(count) + '</strong><small>Projects</small></div>';
-}
-function statusClass(status) {
-  var s = String(status || '').toLowerCase();
-  if (s.indexOf('complete') !== -1) return 'status-pill--green';
-  if (s.indexOf('active') !== -1 || s.indexOf('ongoing') !== -1 || s.indexOf('progress') !== -1) return 'status-pill--blue';
-  if (s.indexOf('pending') !== -1 || s.indexOf('hold') !== -1) return 'status-pill--amber';
-  if (s.indexOf('cancel') !== -1 || s.indexOf('block') !== -1) return 'status-pill--red';
-  return 'status-pill--gray';
-}
-
-function viewContractors() {
-  mount(loadingHtml('Contractors লোড হচ্ছে...'), 'wide');
-  ensureSearchIndexLoaded().then(function () {
-    var contractors = State.allContractors || [];
-    mount('<div class="page-heading"><div><span class="dashboard-kicker">PROJECT NETWORK</span><h1>Contractors</h1><p>All contractor records available from the live project index.</p></div><a class="dash-btn dash-btn--blue" href="#/search">' + icon('search') + ' Search</a></div>' +
-      '<div class="contractors-page-grid">' + contractors.map(plateCard).join('') + '</div>', 'wide');
-  }).catch(function (err) { mount(errorHtml(err.message), 'wide'); });
+    .catch(function (err) { mount(errorHtml(err.message)); });
 }
 
 function statCard(iconName, value, label) {
