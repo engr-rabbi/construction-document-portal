@@ -153,6 +153,15 @@ img { max-width: 100%; display: block; }
 .project-badge__cta { font-size: 0.78rem; font-weight: 600; color: var(--navy); display: flex; align-items: center; gap: 5px; margin-top: 2px; }
 .project-badge__cta .icon { width: 14px; height: 14px; }
 
+.project-badge--add {
+  align-items: center; justify-content: center; text-align: center; gap: 8px;
+  border: 2px dashed var(--border); background: transparent; box-shadow: none;
+  min-height: 150px; cursor: pointer; font-family: inherit; color: var(--muted);
+}
+.project-badge--add .icon { width: 30px; height: 30px; color: var(--navy); }
+.project-badge--add span { font-size: 0.86rem; font-weight: 600; color: var(--ink-soft); }
+.project-badge--add:hover { border-color: var(--navy); background: var(--bg-warm); transform: translateY(-2px); box-shadow: var(--shadow); }
+
 /* ---------------------------------- Category tiles ---------------------------------- */
 .category-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 @media (min-width: 640px) { .category-grid { grid-template-columns: repeat(4, 1fr); } }
