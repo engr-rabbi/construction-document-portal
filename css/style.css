@@ -430,3 +430,143 @@ body { background: var(--premium-bg); }
 @media (max-width: 850px){.topbar__inner--premium{padding:0 16px}.brand--premium{min-width:auto}.brand__copy{display:none}.topbar__search--premium{max-width:none;flex:1}.sidebar{position:fixed;left:-250px;top:74px;width:240px;height:calc(100vh - 74px);transition:left .22s ease;box-shadow:15px 0 30px rgba(4,25,49,.2)}.sidebar-open .sidebar{left:0}.sidebar-backdrop{position:fixed;inset:74px 0 0;background:rgba(2,16,32,.42);z-index:25;display:block;opacity:0;pointer-events:none;transition:opacity .2s}.sidebar-open .sidebar-backdrop{opacity:1;pointer-events:auto}.mobile-menu-btn{display:inline-flex}.view{width:100%;padding:24px 18px 60px}.kpi-grid{grid-template-columns:repeat(2,1fr)}}
 @media (max-width: 620px){.topbar--premium,.topbar__inner--premium{height:auto;min-height:74px}.topbar__inner--premium{flex-wrap:wrap;padding:10px 12px;gap:9px}.mobile-menu-btn{width:38px;height:38px}.brand__mark--logo{width:38px;height:38px}.topbar__search--premium{order:3;flex-basis:100%;min-height:40px}.topbar__actions{margin-left:auto}.top-action--new span{display:none}.top-action--new{width:38px;padding:0}.search-shortcut{display:none}.dashboard-welcome{align-items:flex-start;flex-direction:column}.dashboard-actions{width:100%;display:grid;grid-template-columns:1fr 1fr}.dash-btn{width:100%}.dash-btn--light{grid-column:1/-1}.kpi-grid{grid-template-columns:1fr}.kpi-card{min-height:116px}.quick-grid{grid-template-columns:repeat(2,1fr)}.quick-card:last-child{grid-column:1/-1}.status-grid{grid-template-columns:repeat(2,1fr)}.status-card:last-child{grid-column:1/-1}.project-network-head{align-items:flex-start}.project-network-head .network-button{flex-shrink:0}.panel-head{align-items:center}.dashboard-panel{padding:14px}.view{padding:20px 12px 50px}.page-heading{align-items:flex-start;flex-direction:column}.contractors-page-grid{grid-template-columns:1fr}}
 @media (max-width: 390px){.dashboard-actions{grid-template-columns:1fr}.dash-btn--light{grid-column:auto}.quick-grid{grid-template-columns:1fr 1fr}.status-grid{grid-template-columns:1fr 1fr}.status-card:last-child{grid-column:auto}}
+
+
+/* ============================================================================
+   TOPBAR REFINEMENT — prevents action controls from wrapping onto the white
+   dashboard surface and gives the header a polished, high-density product feel.
+   ============================================================================ */
+.topbar--premium {
+  position: sticky;
+  top: 0;
+  z-index: 100;
+  overflow: visible;
+  background:
+    radial-gradient(circle at 72% -120%, rgba(55, 137, 255, .22), transparent 34%),
+    radial-gradient(circle at 94% 120%, rgba(22, 194, 156, .12), transparent 28%),
+    linear-gradient(100deg, #061a34 0%, #092a4d 55%, #0a3159 100%);
+}
+
+.topbar__inner--premium {
+  flex-wrap: nowrap;
+  min-width: 0;
+  position: relative;
+}
+
+.brand--premium {
+  min-width: 260px;
+  flex: 0 0 auto;
+}
+
+.topbar__search--premium {
+  flex: 1 1 auto;
+  width: auto;
+  max-width: none;
+  min-width: 260px;
+  position: relative;
+  z-index: 2;
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.06), 0 8px 24px rgba(0,0,0,.10);
+  transition: border-color .18s ease, background .18s ease, box-shadow .18s ease;
+}
+.topbar__search--premium:focus-within {
+  background: rgba(255,255,255,.13);
+  border-color: rgba(93, 166, 255, .7);
+  box-shadow: 0 0 0 3px rgba(36,107,254,.16), 0 10px 28px rgba(0,0,0,.14);
+}
+
+.topbar__actions {
+  flex: 0 0 auto;
+  min-width: max-content;
+  padding: 5px;
+  border: 1px solid rgba(255,255,255,.10);
+  border-radius: 15px;
+  background: rgba(2, 17, 35, .30);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05), 0 8px 24px rgba(0,0,0,.10);
+  backdrop-filter: blur(14px);
+}
+
+.top-action {
+  min-width: 40px;
+  height: 40px;
+  border-color: transparent;
+  background: transparent;
+  color: rgba(255,255,255,.92);
+  transition: transform .16s ease, background .16s ease, color .16s ease, box-shadow .16s ease;
+}
+.top-action:hover {
+  transform: translateY(-1px);
+  background: rgba(255,255,255,.10);
+  color: #fff;
+  box-shadow: 0 6px 16px rgba(0,0,0,.14);
+}
+.top-action--new {
+  background: linear-gradient(135deg, #246bfe, #18b991);
+  box-shadow: 0 7px 18px rgba(36,107,254,.22);
+}
+.top-action--new:hover {
+  background: linear-gradient(135deg, #3276ff, #19c49b);
+  box-shadow: 0 9px 22px rgba(36,107,254,.30);
+}
+
+#user-slot { display: flex; align-items: center; }
+.topbar .user-badge {
+  min-height: 40px;
+  padding: 4px 5px 4px 5px;
+  border: 1px solid rgba(255,255,255,.10);
+  background: rgba(255,255,255,.055);
+  box-shadow: inset 0 1px 0 rgba(255,255,255,.05);
+}
+.topbar .user-avatar {
+  width: 31px;
+  height: 31px;
+  border: 1px solid rgba(255,255,255,.22);
+}
+.topbar .user-badge__text strong { color: #fff; }
+.topbar .user-badge__text small { color: rgba(255,255,255,.60); }
+.topbar .user-badge .icon-btn {
+  min-height: 32px;
+  height: 32px;
+  border-radius: 9px;
+  border-color: rgba(255,255,255,.12);
+  background: rgba(255,255,255,.05);
+  color: rgba(255,255,255,.88);
+}
+.topbar .user-badge .icon-btn:hover {
+  color: #fff;
+  border-color: rgba(255,255,255,.22);
+  background: rgba(255,255,255,.10);
+}
+
+.notification-dot {
+  top: 1px;
+  right: 1px;
+  border-color: #092a4d;
+  box-shadow: 0 3px 8px rgba(255,91,103,.30);
+}
+
+/* Give the dashboard surface its own layer so the header action rail can
+   never visually disappear into the white content area. */
+.app-layout { position: relative; z-index: 1; }
+.dashboard-view, .view { position: relative; z-index: 1; }
+
+@media (max-width: 1250px) {
+  .brand--premium { min-width: 235px; }
+  .topbar__inner--premium { gap: 16px; padding-left: 24px; padding-right: 22px; }
+  .topbar__search--premium { min-width: 220px; }
+  .user-badge__text { max-width: 118px; }
+  .user-badge__text strong, .user-badge__text small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+@media (max-width: 1000px) {
+  .brand--premium { min-width: 210px; }
+  .brand__copy strong { font-size: .84rem; }
+  .topbar__search--premium { min-width: 180px; }
+  .user-badge__text { display: none; }
+}
+
+@media (max-width: 850px) {
+  .topbar__inner--premium { flex-wrap: wrap; }
+  .brand--premium { min-width: auto; }
+  .topbar__search--premium { max-width: none; }
+  .topbar__actions { margin-left: auto; }
+}
