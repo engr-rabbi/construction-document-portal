@@ -594,7 +594,8 @@ function canvasToBase64Object_(
 function resizeImageBase64_(
   file,
   maxDim,
-  quality
+  quality,
+  preloaded
 ) {
 
   if (
@@ -607,7 +608,11 @@ function resizeImageBase64_(
     return Promise.resolve(null);
   }
 
-  return loadImageWithOrientation_(file)
+  var loadPromise = preloaded
+    ? Promise.resolve(preloaded)
+    : loadImageWithOrientation_(file);
+
+  return loadPromise
     .then(function (loaded) {
 
       if (!loaded) {
@@ -993,11 +998,6 @@ function compressImageForUpload(
       }
 
 
-      closeImageSource_(
-        loaded
-      );
-
-
       /* -----------------------------------------
        * Resize + compress
        * ----------------------------------------- */
@@ -1005,7 +1005,8 @@ function compressImageForUpload(
       return resizeImageBase64_(
         file,
         cfg.maxDim,
-        cfg.quality
+        cfg.quality,
+        loaded
       )
         .then(function (res) {
 
