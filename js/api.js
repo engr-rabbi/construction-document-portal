@@ -38,6 +38,12 @@ var Api = (function () {
           throw new Error(res.error || 'Unknown error');
         }
         return res.data;
+      })
+      .catch(function (err) {
+        if (err.name === 'TypeError' || err.message === 'Failed to fetch') {
+          throw new Error('Network error: Failed to connect to server. Check your connection.');
+        }
+        throw err;
       });
   }
 

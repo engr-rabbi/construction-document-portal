@@ -99,8 +99,8 @@ function renderShell() {
   var isStaff = user.role === 'admin' || user.role === 'moderator';
   var adminLinks = isStaff
     ? '<div class="side-nav__label">ADMINISTRATION</div>' +
-      '<a href="#/admin/dashboard" class="side-link" data-nav="admin">' + icon('users') + '<span>User Management</span></a>' +
-      '<a href="#/admin/settings" class="side-link" data-nav="admin">' + icon('gear') + '<span>System Settings</span></a>'
+    '<a href="#/admin/dashboard" class="side-link" data-nav="admin">' + icon('users') + '<span>User Management</span></a>' +
+    '<a href="#/admin/settings" class="side-link" data-nav="admin">' + icon('gear') + '<span>System Settings</span></a>'
     : '';
 
   shell.innerHTML =
@@ -163,9 +163,9 @@ function renderShell() {
   var themeBtn = document.getElementById('theme-btn');
   if (themeBtn) themeBtn.addEventListener('click', function () {
     document.documentElement.classList.toggle('theme-soft');
-    try { localStorage.setItem('cdp-theme-soft', document.documentElement.classList.contains('theme-soft') ? '1' : '0'); } catch (e) {}
+    try { localStorage.setItem('cdp-theme-soft', document.documentElement.classList.contains('theme-soft') ? '1' : '0'); } catch (e) { }
   });
-  try { if (localStorage.getItem('cdp-theme-soft') === '1') document.documentElement.classList.add('theme-soft'); } catch (e) {}
+  try { if (localStorage.getItem('cdp-theme-soft') === '1') document.documentElement.classList.add('theme-soft'); } catch (e) { }
 
   var mobileBtn = document.getElementById('mobile-menu-btn');
   var backdrop = document.getElementById('sidebar-backdrop');
@@ -180,9 +180,9 @@ function updateActiveSideNav() {
   var hash = location.hash || '#/';
   var key = hash === '#/' ? 'dashboard' :
     hash.indexOf('#/contractors') === 0 ? 'contractors' :
-    hash.indexOf('#/project/') === 0 ? 'projects' :
-    hash.indexOf('#/admin') === 0 ? 'admin' :
-    hash.indexOf('#/search') === 0 ? 'search' : 'dashboard';
+      hash.indexOf('#/project/') === 0 ? 'projects' :
+        hash.indexOf('#/admin') === 0 ? 'admin' :
+          hash.indexOf('#/search') === 0 ? 'search' : 'dashboard';
   document.querySelectorAll('.side-link').forEach(function (a) {
     a.classList.toggle('side-link--active', a.getAttribute('data-nav') === key);
   });
@@ -327,7 +327,20 @@ function emptyStateHtml(title, subtitle) {
 }
 
 function errorStateHtml(message) {
-  return '<div class="empty-state empty-state--error"><div class="empty-state__icon">' + icon('close') + '</div><h3>⚠️ Something went wrong</h3><p class="muted">' + escapeHtml(message) + '</p><button class="btn btn--ghost" onclick="router()">' + icon('refresh') + ' Try again</button></div>';
+  var isNetwork = /network|fetch|failed to fetch|load|timeout|abort/i.test(message);
+  var isSession = /session|expired|sign.in/i.test(message);
+  var heading = isNetwork ? '🌐 Connection Error' : isSession ? '🔒 Session Expired' : '⚠️ Something went wrong';
+  var hint = isNetwork ? 'Please check your internet connection and try again.'
+    : isSession ? 'Your session has expired. Please sign in again.'
+      : escapeHtml(message);
+  return '<div class="empty-state empty-state--error">' +
+    '<div class="empty-state__icon">' + icon('close') + '</div>' +
+    '<h3>' + heading + '</h3>' +
+    '<p class="muted">' + hint + '</p>' +
+    '<div class="btn-row" style="justify-content:center;margin-top:12px">' +
+    '<button class="btn btn--primary btn--sm" onclick="router()">' + icon('refresh') + ' Retry</button>' +
+    (isSession ? '<button class="btn btn--ghost btn--sm" onclick="openLoginModal()">' + icon('logout') + ' Sign in</button>' : '') +
+    '</div></div>';
 }
 
 function errorHtml(message) { return errorStateHtml(message); }
@@ -336,91 +349,125 @@ function errorHtml(message) { return errorStateHtml(message); }
 
 function viewHome() {
   mount(loadingHtml('ড্যাশবোর্ড লোড হচ্ছে...'), 'dashboard');
+
   Promise.all([Api.get('dashboardStats', {}), ensureSearchIndexLoaded()])
     .then(function (res) {
       var stats = res[0] || {};
-      var contractors = State.allContractors || [];
       var projects = State.allProjects || [];
-      var user = Auth.getUser();
+      var contractors = State.allContractors || [];
+      var user = Auth.getUser() || { role: 'public', name: 'Guest' };
+      var isStaff = user.role === 'admin' || user.role === 'moderator';
+
+      /* DashboardStats is the preferred source, but keep the dashboard usable
+         when the backend does not provide derived counts. */
+      var activeProjects = projects.filter(function (p) {
+        var s = String(p.status || '').toLowerCase();
+        return s.indexOf('active') !== -1 || s.indexOf('ongoing') !== -1 || s.indexOf('progress') !== -1;
+      }).length;
+      var completedProjects = projects.filter(function (p) {
+        return String(p.status || '').toLowerCase().indexOf('complete') !== -1;
+      }).length;
+
       var statusMap = {};
       projects.forEach(function (p) {
-        var status = p.status || 'Unknown';
+        var status = String(p.status || 'Unknown');
         statusMap[status] = (statusMap[status] || 0) + 1;
       });
-      var statusEntries = Object.keys(statusMap).sort(function (a,b) { return statusMap[b] - statusMap[a]; }).slice(0, 5);
-      var recentProjects = projects.slice(0, 6);
-      var activeProjects = projects.filter(function (p) { return /active|ongoing|progress/i.test(p.status || ''); }).length;
-      var completedProjects = projects.filter(function (p) { return /complete|completed/i.test(p.status || ''); }).length;
-      if (!activeProjects && stats.totalProjects) activeProjects = Math.max(0, Number(stats.totalProjects) - completedProjects);
+      var statusEntries = Object.keys(statusMap).sort(function (a, b) {
+        return statusMap[b] - statusMap[a];
+      });
+
+      var recentProjects = projects.slice().sort(function (a, b) {
+        var ad = new Date(a.updatedAt || a.modifiedAt || a.createdAt || 0).getTime();
+        var bd = new Date(b.updatedAt || b.modifiedAt || b.createdAt || 0).getTime();
+        return bd - ad;
+      }).slice(0, 8);
 
       var html =
         '<div class="dashboard-shell">' +
         '  <section class="dashboard-welcome">' +
-        '    <div><span class="dashboard-kicker">CONSTRUCTION INTELLIGENCE PLATFORM</span><h1>Good morning, ' + escapeHtml(user.name || 'Admin') + '! <span>👋</span></h1><p>Here’s what’s happening with your construction projects today.</p></div>' +
-        '    <div class="dashboard-actions">' +
-        '      <button class="dash-btn dash-btn--green" id="dash-upload-btn">' + icon('upload') + ' Upload Document</button>' +
-        '      <button class="dash-btn dash-btn--blue" id="dash-add-btn">' + icon('plus') + ' Add Project</button>' +
-        '      <button class="dash-btn dash-btn--light" id="dash-search-btn">' + icon('search') + ' Quick Search</button>' +
-        '    </div>' +
+        '    <div><span class="dashboard-kicker">CONSTRUCTION INTELLIGENCE PLATFORM</span><h1>' + greetingForDashboard(user) + ', ' + escapeHtml(user.name || 'Guest') + '! <span>👋</span></h1><p>Here\'s what\'s happening with your construction projects today.</p></div>' +
+        (isStaff ? '<div class="dashboard-actions"><button class="dash-btn dash-btn--blue" id="dash-add-btn">' + icon('plus') + ' New Project</button></div>' : '') +
         '  </section>' +
         '  <section class="kpi-grid">' +
-          dashboardKpi('building', stats.totalProjects, 'Total Projects', 'blue', 'Projects in portal') +
-          dashboardKpi('activity', activeProjects, 'Active Projects', 'green', 'Currently in progress') +
-          dashboardKpi('check', completedProjects, 'Completed Projects', 'amber', 'Completed records') +
-          dashboardKpi('users', stats.totalContractors, 'Total Contractors', 'purple', 'Contractor network') +
-          dashboardKpi('doc', stats.totalDocuments, 'Total Documents', 'red', 'Managed documents') +
-        '</section>' +
+        dashboardKpi('building', stats.totalProjects != null ? stats.totalProjects : projects.length, 'Total Projects', 'blue', 'Projects in portal') +
+        dashboardKpi('activity', activeProjects, 'Active Projects', 'green', 'Currently in progress') +
+        dashboardKpi('check', completedProjects, 'Completed Projects', 'amber', 'Completed records') +
+        dashboardKpi('users', stats.totalContractors != null ? stats.totalContractors : contractors.length, 'Total Contractors', 'purple', 'Contractor network') +
+        dashboardKpi('doc', stats.totalDocuments != null ? stats.totalDocuments : countFiles(projects, 'doc'), 'Total Documents', 'red', 'Managed documents') +
+        '  </section>' +
+        '  <section class="dashboard-panel contractor-network-panel">' +
+        '    <div class="panel-head"><div><h2>' + icon('users') + ' Contractor Network</h2><p>' + contractors.length + ' contractors connected — Live coverage</p></div><a href="#/contractors" class="mini-action" id="open-contractors-btn">' + icon('users') + ' View All <span>›</span></a></div>' +
+        '    <div class="contractor-network-grid">' +
+        contractors.slice(0, 8).map(function (c) {
+          return '<a href="#/contractor/' + encodeURIComponent(c.contractorId) + '" class="contractor-net-card">' +
+            '<span class="contractor-net-avatar">' + escapeHtml((c.contractorName || 'C').charAt(0).toUpperCase()) + '</span>' +
+            '<div class="contractor-net-info"><strong>' + escapeHtml(c.contractorName) + '</strong><small class="mono">' + escapeHtml(c.contractorId) + '</small></div>' +
+            '<div class="contractor-net-stats"><span>' + icon('building') + ' ' + (c.projectCount || 0) + '</span><span>' + icon('doc') + ' ' + (c.fileCount || 0) + '</span></div>' +
+            '<span class="contractor-net-arrow">→</span>' +
+            '</a>';
+        }).join('') +
+        (contractors.length > 8 ? '<a href="#/contractors" class="contractor-net-card contractor-net-card--more"><span class="contractor-net-more-icon">' + icon('plus') + '</span><strong>+' + (contractors.length - 8) + ' more</strong><small>View all contractors</small></a>' : '') +
+        (contractors.length === 0 ? '<div class="muted">No contractor records available.</div>' : '') +
+        '    </div>' +
+        '  </section>' +
         '  <section class="dashboard-grid dashboard-grid--main">' +
         '    <div class="dashboard-panel quick-panel"><div class="panel-head"><div><h2>Quick Access</h2><p>Frequently used actions</p></div></div><div class="quick-grid">' +
-          quickAccessCard('building','blue','All Projects','View all projects','#/search/projects') +
-          quickAccessCard('users','green','Contractors','Manage contractors','#/contractors') +
-          quickAccessCard('doc','amber','Documents','All documents','#/search/documents') +
-          quickAccessCard('camera','purple','Photos','Project photos','#/search/photos') +
-          quickAccessCard('grid','cyan','Categories','Project categories','#/search/categories') +
+        quickAccessCard('building', 'blue', 'All Projects', 'View all projects', '#/search/projects') +
+        quickAccessCard('users', 'green', 'Contractors', 'Manage contractors', '#/contractors') +
+        quickAccessCard('doc', 'amber', 'Documents', 'All documents', '#/search/documents') +
+        quickAccessCard('camera', 'purple', 'Photos', 'Project photos', '#/search/photos') +
+        quickAccessCard('grid', 'cyan', 'Categories', 'Project categories', '#/search/categories') +
         '</div></div>' +
         '    <div class="dashboard-panel activity-panel"><div class="panel-head"><div><h2>Management Snapshot</h2><p>Live data overview</p></div><button class="panel-link" id="view-all-search">View All</button></div>' +
-          '<div class="snapshot-list">' +
-            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--blue">' + icon('building') + '</span><div><strong>' + escapeHtml(stats.totalProjects || 0) + ' Projects</strong><small>Available in the live project index</small></div></div>' +
-            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--green">' + icon('users') + '</span><div><strong>' + escapeHtml(stats.totalContractors || 0) + ' Contractors</strong><small>Connected to the project network</small></div></div>' +
-            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--amber">' + icon('upload') + '</span><div><strong>' + escapeHtml(stats.todaysUploads || 0) + ' Today’s Uploads</strong><small>Documents and photos uploaded today</small></div></div>' +
-            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--red">' + icon('doc') + '</span><div><strong>' + escapeHtml(stats.totalDocuments || 0) + ' Documents</strong><small>Available across project records</small></div></div>' +
-          '</div>' +
-        '    </div>' +
+        '<div class="snapshot-list">' +
+        '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--blue">' + icon('building') + '</span><div><strong>' + escapeHtml(stats.totalProjects != null ? stats.totalProjects : projects.length) + ' Projects</strong><small>Available in the live project index</small></div></div>' +
+        '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--green">' + icon('users') + '</span><div><strong>' + escapeHtml(stats.totalContractors != null ? stats.totalContractors : contractors.length) + ' Contractors</strong><small>Connected to the project network</small></div></div>' +
+        '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--amber">' + icon('upload') + '</span><div><strong>' + escapeHtml(stats.todaysUploads || 0) + ' Today\'s Uploads</strong><small>Documents and photos uploaded today</small></div></div>' +
+        '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--red">' + icon('doc') + '</span><div><strong>' + escapeHtml(stats.totalDocuments != null ? stats.totalDocuments : countFiles(projects, 'doc')) + ' Documents</strong><small>Available across project records</small></div></div>' +
+        '</div></div>' +
         '  </section>' +
         '  <section class="dashboard-grid dashboard-grid--status">' +
         '    <div class="dashboard-panel"><div class="panel-head"><div><h2>Projects at a Glance</h2><p>Overview of current project status</p></div></div><div class="status-grid">' +
-          (statusEntries.length ? statusEntries.map(function (s, i) { return statusCard(s, statusMap[s], i); }).join('') : '<div class="muted">No project status data available.</div>') +
-        '</div></div>' +
-        '    <div class="dashboard-panel contractor-mini-panel"><div class="panel-head"><div><h2>Contractor Network</h2><p>Live contractor coverage</p></div><button class="mini-action" id="open-contractors-btn">' + icon('users') + ' Contractors <span>›</span></button></div><div class="contractor-mini-list">' +
-          contractors.slice(0, 5).map(function (c) { return '<a href="#/contractor/' + encodeURIComponent(c.contractorId) + '" class="contractor-mini"><span class="contractor-avatar">' + escapeHtml((c.contractorName || 'C').charAt(0).toUpperCase()) + '</span><span><strong>' + escapeHtml(c.contractorName) + '</strong><small>' + escapeHtml(c.projectCount || 0) + ' projects · ' + escapeHtml(c.fileCount || 0) + ' files</small></span><span class="contractor-arrow">›</span></a>'; }).join('') +
-          (contractors.length > 5 ? '<button class="more-contractors" id="more-contractors-btn">+' + (contractors.length - 5) + ' more contractors</button>' : '') +
+        (statusEntries.length ? statusEntries.map(function (status, i) { return statusCard(status, statusMap[status], i); }).join('') : '<div class="muted">No project status data available.</div>') +
         '</div></div>' +
         '  </section>' +
         '  <section class="project-network-head"><div><h2>Project Network</h2><p>Recent project records from live data</p></div><a href="#/contractors" class="network-button">' + icon('users') + ' Contractors <span>›</span></a></section>' +
         '  <section class="dashboard-panel recent-projects-panel"><div class="panel-head"><div><h2>Recent Projects</h2><p>Project index overview</p></div><a href="#/search/projects" class="panel-link">View All Projects</a></div>' +
         '    <div class="responsive-table"><table class="premium-table"><thead><tr><th>Project ID</th><th>Project Name</th><th>Contractor</th><th>Status</th><th>Documents</th><th>Photos</th><th></th></tr></thead><tbody>' +
-          (recentProjects.length ? recentProjects.map(function (p) { return '<tr><td class="mono strong-id">' + escapeHtml(p.projectId) + '</td><td><strong>' + escapeHtml(p.projectName || p.projectId) + '</strong></td><td>' + escapeHtml(p.contractorName || p.contractorId || '—') + '</td><td><span class="status-pill ' + statusClass(p.status) + '">' + escapeHtml(p.status || 'Unknown') + '</span></td><td>' + escapeHtml(p.docCount || 0) + '</td><td>' + escapeHtml(p.photoCount || 0) + '</td><td><a class="row-action" href="#/project/' + encodeURIComponent(p.projectId) + '" aria-label="Open project">›</a></td></tr>'; }).join('') : '<tr><td colspan="7" class="table-empty">No project records available.</td></tr>') +
+        (recentProjects.length ? recentProjects.map(function (p) {
+          return '<tr><td class="mono strong-id">' + escapeHtml(p.projectId) + '</td><td><strong>' + escapeHtml(p.projectName || p.projectId) + '</strong></td><td>' + escapeHtml(p.contractorName || p.contractorId || '—') + '</td><td><span class="status-pill ' + statusClass(p.status) + '">' + escapeHtml(p.status || 'Unknown') + '</span></td><td>' + escapeHtml(p.docCount || 0) + '</td><td>' + escapeHtml(p.photoCount || 0) + '</td><td><a class="row-action" href="#/project/' + encodeURIComponent(p.projectId) + '" aria-label="Open project">›</a></td></tr>';
+        }).join('') : '<tr><td colspan="7" class="table-empty">No project records available.</td></tr>') +
         '</tbody></table></div></section>' +
-        '  </div>';
+        '</div>';
 
       mount(html, 'dashboard');
-      var uploadBtn = document.getElementById('dash-upload-btn');
+
       var addBtn = document.getElementById('dash-add-btn');
-      if (uploadBtn) uploadBtn.addEventListener('click', function () { location.hash = '#/search'; });
-      if (addBtn) {
-        if (user.role === 'public' || user.role === 'contractor') {
-          addBtn.innerHTML = icon('search') + ' Search Projects';
-          addBtn.addEventListener('click', function () { location.hash = '#/search'; });
-        } else {
-          addBtn.addEventListener('click', function () { openNewSystemModal(); });
-        }
-      }
-      document.getElementById('dash-search-btn').addEventListener('click', function () { document.getElementById('global-search-input').focus(); });
-      document.getElementById('view-all-search').addEventListener('click', function () { location.hash = '#/search'; });
-      document.getElementById('open-contractors-btn').addEventListener('click', function () { location.hash = '#/contractors'; });
-      var more = document.getElementById('more-contractors-btn'); if (more) more.addEventListener('click', function () { location.hash = '#/contractors'; });
+      if (addBtn) addBtn.addEventListener('click', function () { openNewSystemModal(); });
+
+      var viewAll = document.getElementById('view-all-search');
+      if (viewAll) viewAll.addEventListener('click', function () { location.hash = '#/search'; });
+
+      var contractorsBtn = document.getElementById('open-contractors-btn');
+      if (contractorsBtn) contractorsBtn.addEventListener('click', function () { location.hash = '#/contractors'; });
     })
-    .catch(function (err) { mount(errorHtml(err.message), 'dashboard'); });
+    .catch(function (err) {
+      mount(errorHtml(err && err.message ? err.message : String(err)), 'dashboard');
+    });
+}
+
+function greetingForDashboard(user) {
+  var hour = new Date().getHours();
+  return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
+}
+
+function countFiles(projects, kind) {
+  var total = 0;
+  projects.forEach(function (p) {
+    total += kind === 'doc' ? Number(p.docCount || 0) : Number(p.photoCount || 0);
+  });
+  return total;
 }
 
 function dashboardKpi(iconName, value, label, tone, meta) {
@@ -430,7 +477,7 @@ function quickAccessCard(iconName, tone, title, subtitle, href) {
   return '<a class="quick-card quick-card--' + tone + '" href="' + href + '"><span class="quick-card__icon">' + icon(iconName) + '</span><strong>' + escapeHtml(title) + '</strong><small>' + escapeHtml(subtitle) + '</small></a>';
 }
 function statusCard(label, count, index) {
-  var tones = ['blue','green','amber','purple','red'];
+  var tones = ['blue', 'green', 'amber', 'purple', 'red'];
   var tone = tones[index % tones.length];
   return '<div class="status-card status-card--' + tone + '"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(count) + '</strong><small>Projects</small></div>';
 }
@@ -503,7 +550,7 @@ function viewContractor(contractorId) {
         (projects.length === 0 && !canCreateProject
           ? '<div class="empty-state"><p>এখনো কোনো প্রজেক্ট তৈরি হয়নি।</p></div>'
           : '<section class="project-grid">' + projects.map(projectBadge).join('') +
-            (canCreateProject ? addProjectTileHtml() : '') + '</section>')
+          (canCreateProject ? addProjectTileHtml() : '') + '</section>')
       );
 
       if (canCreateProject) {
@@ -545,10 +592,10 @@ function openNewSystemModal(defaultContractorId) {
     // প্রতিষ্ঠানের নাম fixed/read-only হিসেবে দেখানো হয় (backend-ও এটাই enforce করে)
     var contractorFieldHtml = isSelfContractor
       ? '<label>Contractor<input type="text" value="' + escapeHtml(user.contractorName || '') + '" disabled></label>' +
-        '<input type="hidden" name="contractorId" value="' + escapeHtml(user.contractorId) + '">'
+      '<input type="hidden" name="contractorId" value="' + escapeHtml(user.contractorId) + '">'
       : '<label>Contractor<select name="contractorId" required>' +
-        contractors.map(function (c) { return '<option value="' + escapeHtml(c.contractorId) + '"' + (c.contractorId === defaultContractorId ? ' selected' : '') + '>' + escapeHtml(c.contractorName) + '</option>'; }).join('') +
-        '</select></label>';
+      contractors.map(function (c) { return '<option value="' + escapeHtml(c.contractorId) + '"' + (c.contractorId === defaultContractorId ? ' selected' : '') + '>' + escapeHtml(c.contractorName) + '</option>'; }).join('') +
+      '</select></label>';
 
     var node = el(
       '<div class="modal">' +
@@ -800,11 +847,12 @@ function handleFiles(fileList, projectId, category) {
 
     Promise.all([compressImageForUpload(file), makeThumbnail(file)])
       .then(function (res) {
-        var main = res[0], thumbBase64 = res[1];
+        var main = res[0], thumbResult = res[1];
         return Api.post('uploadFile', {
           projectId: projectId, category: category, fileName: main.fileName,
           mimeType: main.mimeType, fileData: main.base64,
-          thumbnailData: thumbBase64 || undefined
+          thumbnailData: thumbResult ? thumbResult.base64 : undefined,
+          thumbnailMimeType: thumbResult ? thumbResult.mimeType : undefined
         });
       })
       .then(function () {
@@ -1029,11 +1077,12 @@ function openQuickView(items, idx) {
   node.querySelector('.lightbox__close').addEventListener('click', close);
   node.querySelector('.lightbox__prev').addEventListener('click', function () { show(idx - 1); });
   node.querySelector('.lightbox__next').addEventListener('click', function () { show(idx + 1); });
-  document.addEventListener('keydown', function esc(e) {
-    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', esc); }
+  function onKey(e) {
+    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
     if (e.key === 'ArrowLeft') show(idx - 1);
     if (e.key === 'ArrowRight') show(idx + 1);
-  });
+  }
+  document.addEventListener('keydown', onKey);
   show(idx);
 }
 
@@ -1336,7 +1385,9 @@ function adminUsersTab() {
 }
 
 function openAddUserModal() {
-  Api.get('listContractors', {}).then(function (contractors) {
+  // Reuse cached contractors if available to avoid extra API call
+  var contractorPromise = State.allContractors ? Promise.resolve(State.allContractors) : Api.get('listContractors', {});
+  contractorPromise.then(function (contractors) {
     var node = el(
       '<div class="modal modal--sm"><div class="modal__head"><h3>Add User</h3><button class="icon-btn modal-close">' + icon('close') + '</button></div>' +
       '<div class="modal__body"><form id="add-u-form">' +
@@ -1359,7 +1410,8 @@ function openAddUserModal() {
 }
 
 function openEditUserModal(email, currentRole, currentContractorId) {
-  Api.get('listContractors', {}).then(function (contractors) {
+  var contractorPromise = State.allContractors ? Promise.resolve(State.allContractors) : Api.get('listContractors', {});
+  contractorPromise.then(function (contractors) {
     var node = el(
       '<div class="modal modal--sm"><div class="modal__head"><h3>Edit User</h3><button class="icon-btn modal-close">' + icon('close') + '</button></div>' +
       '<div class="modal__body"><form id="edit-u-form">' +
