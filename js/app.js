@@ -768,6 +768,7 @@ function uploadDropzoneHtml() {
     '  <p class="muted small">Images: JPG, PNG, WEBP &middot; Documents: PDF, DOC, DOCX, XLS, XLSX</p>' +
     '  <input type="file" id="file-input" multiple hidden>' +
     '  <div id="upload-list" class="upload-list"></div>' +
+    '  <div id="upload-summary" class="upload-summary" hidden></div>' +
     '</section>'
   );
 }
@@ -788,18 +789,66 @@ function wireUploadDropzone(projectId, category) {
 }
 
 function handleFiles(fileList, projectId, category) {
-  var list = document.getElementById('upload-list');
   var files = Array.prototype.slice.call(fileList);
+  if (!files.length) return;
+
+  // একই ছবি ভুলবশত এই একই সিলেকশনে দুইবার চলে এলে (নাম+সাইজ+শেষ-পরিবর্তনের-সময়
+  // মিলিয়ে) সনাক্ত করে বাদ দেওয়া হয়। ইচ্ছাকৃতভাবে আগে-থেকে-আপলোড-করা ফাইলের
+  // সাথে তুলনা করা হয় না — দুইটা ভিন্ন ছবির নাম কাকতালীয়ভাবে এক হতেই পারে
+  // (যেমন দুই দিনে তোলা দুইটা IMG_001.jpg), সেটাকে duplicate ধরে ব্লক করলে
+  // বৈধ আপলোডই আটকে যাবে।
+  var seen = {};
+  var uniqueFiles = [];
+  var skipped = 0;
   files.forEach(function (file) {
+    var key = file.name + '|' + file.size + '|' + (file.lastModified || 0);
+    if (seen[key]) { skipped++; return; }
+    seen[key] = true;
+    uniqueFiles.push(file);
+  });
+  if (skipped > 0) {
+    Toast.info(skipped + 'টা ডুপ্লিকেট ফাইল (একই নাম/সাইজ) এই সিলেকশন থেকে বাদ দেওয়া হয়েছে');
+  }
+
+  runUploadQueue(uniqueFiles, projectId, category);
+}
+
+/**
+ * আগে multiple file select করলে সবগুলোর আপলোড একসাথে (parallel, forEach দিয়ে)
+ * শুরু হয়ে যেত — এতে backend-এ প্রায় একই মুহূর্তে অনেকগুলো uploadFile request
+ * পৌঁছাত, যা FileId generation-এ race condition তৈরি করত (দেখুন Api_Upload.gs-এর
+ * মন্তব্য) — এটাই ছিল "গ্যালারিতে একই ছবি বারবার দেখানো" বাগের root cause,
+ * ব্যাকএন্ডে এখন LockService দিয়ে সেটা ফিক্স করা হয়েছে। এখানে frontend-এও একটা
+ * প্রকৃত সিরিয়াল queue বানানো হলো (defense-in-depth + স্পষ্ট per-file progress
+ * UI): একবারে ঠিক একটাই ফাইল আপলোড হয়, বাকিগুলো স্পষ্টভাবে "Waiting" দেখায়,
+ * এবং একটা fail করলেও বাকিগুলোর আপলোড থেমে যায় না।
+ */
+function runUploadQueue(files, projectId, category) {
+  if (!files.length) return;
+  var list = document.getElementById('upload-list');
+  var summaryEl = document.getElementById('upload-summary');
+
+  var items = files.map(function (file) {
     var row = el(
-      '<div class="upload-item">' +
-      '  <div class="upload-item__top"><span class="upload-item__name">' + escapeHtml(file.name) + '</span><span class="upload-item__status">প্রস্তুত হচ্ছে...</span></div>' +
-      '  <div class="upload-item__bar"><div class="upload-item__bar-fill" style="width:4%"></div></div>' +
+      '<div class="upload-item upload-item--waiting">' +
+      '  <div class="upload-item__top"><span class="upload-item__name">' + escapeHtml(file.name) + '</span><span class="upload-item__status">⏳ Waiting</span></div>' +
+      '  <div class="upload-item__bar"><div class="upload-item__bar-fill" style="width:0%"></div></div>' +
       '</div>'
     );
     list.appendChild(row);
-    var statusEl = row.querySelector('.upload-item__status');
-    var barEl = row.querySelector('.upload-item__bar-fill');
+    return { file: file, row: row, statusEl: row.querySelector('.upload-item__status'), barEl: row.querySelector('.upload-item__bar-fill'), ok: null };
+  });
+
+  var done = 0;
+  function renderProgress() {
+    summaryEl.hidden = false;
+    summaryEl.innerHTML = 'Uploading ' + items.length + ' file' + (items.length === 1 ? '' : 's') + '... <strong>Progress: ' + done + ' / ' + items.length + '</strong>';
+  }
+  renderProgress();
+
+  function uploadOne(item) {
+    item.row.classList.remove('upload-item--waiting');
+    item.statusEl.textContent = 'প্রস্তুত হচ্ছে...';
 
     // Apps Script Web App-এর সাথে real byte-level upload progress সম্ভব না (দেখুন api.js-এর
     // নোট — xhr.upload progress listener CORS preflight ট্রিগার করে, যা Apps Script হ্যান্ডেল
@@ -808,11 +857,11 @@ function handleFiles(fileList, projectId, category) {
     var simPct = 4;
     var simTimer = setInterval(function () {
       simPct += (90 - simPct) * 0.12;
-      barEl.style.width = simPct + '%';
-      statusEl.textContent = Math.round(simPct) + '%';
+      item.barEl.style.width = simPct + '%';
+      item.statusEl.textContent = 'Uploading... ' + Math.round(simPct) + '%';
     }, 250);
 
-    Promise.all([compressImageForUpload(file), makeThumbnail(file)])
+    return Promise.all([compressImageForUpload(item.file), makeThumbnail(item.file)])
       .then(function (res) {
         var main = res[0], thumbBase64 = res[1];
         return Api.post('uploadFile', {
@@ -823,18 +872,44 @@ function handleFiles(fileList, projectId, category) {
       })
       .then(function () {
         clearInterval(simTimer);
-        barEl.style.width = '100%';
-        statusEl.innerHTML = '✅ Uploaded';
-        row.classList.add('upload-item--ok');
-        refreshSearchIndex();
-        refreshFileAreaIfPresent(projectId, category);
+        item.barEl.style.width = '100%';
+        item.statusEl.innerHTML = '✅ Uploaded';
+        item.row.classList.add('upload-item--ok');
+        item.ok = true;
       })
       .catch(function (err) {
         clearInterval(simTimer);
-        statusEl.innerHTML = '❌ ' + escapeHtml(err.message);
-        row.classList.add('upload-item--fail');
-      });
-  });
+        item.statusEl.innerHTML = '❌ ' + escapeHtml(err.message);
+        item.row.classList.add('upload-item--fail');
+        item.ok = false;
+      })
+      .then(function () { done++; renderProgress(); });
+  }
+
+  // সিরিয়ালি এক এক করে (reduce দিয়ে chain করা) — একসাথে সবগুলো ছুঁড়ে দিলে
+  // backend-এ concurrency race আবার ফিরে আসতে পারত।
+  items.reduce(function (chain, item) { return chain.then(function () { return uploadOne(item); }); }, Promise.resolve())
+    .then(function () {
+      refreshSearchIndex();
+      refreshFileAreaIfPresent(projectId, category);
+
+      var okCount = items.filter(function (i) { return i.ok; }).length;
+      var failItems = items.filter(function (i) { return i.ok === false; });
+      var html = '✅ ' + okCount + ' file' + (okCount === 1 ? '' : 's') + ' uploaded successfully.';
+      if (failItems.length) {
+        html += ' &nbsp; ❌ ' + failItems.length + ' file' + (failItems.length === 1 ? '' : 's') + ' failed. ' +
+          '<button type="button" class="link" id="retry-failed-uploads">Retry Failed Files</button>';
+      }
+      summaryEl.innerHTML = html;
+
+      var retryBtn = document.getElementById('retry-failed-uploads');
+      if (retryBtn) {
+        retryBtn.addEventListener('click', function () {
+          failItems.forEach(function (i) { i.row.remove(); });
+          runUploadQueue(failItems.map(function (i) { return i.file; }), projectId, category);
+        });
+      }
+    });
 }
 
 function refreshFileAreaIfPresent() {
