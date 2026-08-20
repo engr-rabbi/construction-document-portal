@@ -86,7 +86,15 @@ function mountSearchableSelect(containerEl, options, config) {
     else if (e.key === 'Enter') { e.preventDefault(); if (highlighted >= 0 && filtered[highlighted]) select(filtered[highlighted]); }
     else if (e.key === 'Escape') { menu.hidden = true; }
   });
-  document.addEventListener('click', function (e) { if (!containerEl.contains(e.target)) menu.hidden = true; });
+  // এই কম্বোবক্স যতবার মাউন্ট হয় (নতুন Search পাতায় যাওয়া, বা New Project মোডাল খোলা)
+  // ততবার একটা নতুন document click-listener লাগানো হতো কিন্তু view/modal বদলে গেলেও
+  // সেটা কখনো সরানো হতো না — সেশন যত লম্বা হতো, ততই "zombie" listener জমতে থাকত
+  // (memory/performance leak)। এখন প্রতিটা click-এ নিজেই চেক করে containerEl আর DOM-এ
+  // আছে কিনা — না থাকলে নিজে থেকেই removeEventListener করে সরে যায় (self-cleaning)।
+  document.addEventListener('click', function outsideClick(e) {
+    if (!document.body.contains(containerEl)) { document.removeEventListener('click', outsideClick); return; }
+    if (!containerEl.contains(e.target)) menu.hidden = true;
+  });
 
   return { setOptions: function (o) { options = o; filterNow(); }, clear: function () { input.value = ''; } };
 }
@@ -99,8 +107,8 @@ function renderShell() {
   var isStaff = user.role === 'admin' || user.role === 'moderator';
   var adminLinks = isStaff
     ? '<div class="side-nav__label">ADMINISTRATION</div>' +
-    '<a href="#/admin/dashboard" class="side-link" data-nav="admin">' + icon('users') + '<span>User Management</span></a>' +
-    '<a href="#/admin/settings" class="side-link" data-nav="admin">' + icon('gear') + '<span>System Settings</span></a>'
+      '<a href="#/admin/dashboard" class="side-link" data-nav="admin">' + icon('users') + '<span>User Management</span></a>' +
+      '<a href="#/admin/settings" class="side-link" data-nav="admin">' + icon('gear') + '<span>System Settings</span></a>'
     : '';
 
   shell.innerHTML =
@@ -118,7 +126,7 @@ function renderShell() {
     '    </form>' +
     '    <nav class="topbar__actions">' +
     '      <button class="top-action top-action--new" id="top-new-btn" title="New Project">' + icon('plus') + '<span>New</span></button>' +
-    '      <button class="top-action" title="Notifications" aria-label="Notifications">' + icon('bell') + '<span class="notification-dot">5</span></button>' +
+    '      <button class="top-action" title="Notifications" aria-label="Notifications">' + icon('bell') + '</button>' +
     '      <button class="top-action" id="theme-btn" title="Theme" aria-label="Theme">' + icon('sun') + '</button>' +
     '      <div id="user-slot"></div>' +
     '    </nav>' +
@@ -163,9 +171,9 @@ function renderShell() {
   var themeBtn = document.getElementById('theme-btn');
   if (themeBtn) themeBtn.addEventListener('click', function () {
     document.documentElement.classList.toggle('theme-soft');
-    try { localStorage.setItem('cdp-theme-soft', document.documentElement.classList.contains('theme-soft') ? '1' : '0'); } catch (e) { }
+    try { localStorage.setItem('cdp-theme-soft', document.documentElement.classList.contains('theme-soft') ? '1' : '0'); } catch (e) {}
   });
-  try { if (localStorage.getItem('cdp-theme-soft') === '1') document.documentElement.classList.add('theme-soft'); } catch (e) { }
+  try { if (localStorage.getItem('cdp-theme-soft') === '1') document.documentElement.classList.add('theme-soft'); } catch (e) {}
 
   var mobileBtn = document.getElementById('mobile-menu-btn');
   var backdrop = document.getElementById('sidebar-backdrop');
@@ -180,9 +188,9 @@ function updateActiveSideNav() {
   var hash = location.hash || '#/';
   var key = hash === '#/' ? 'dashboard' :
     hash.indexOf('#/contractors') === 0 ? 'contractors' :
-      hash.indexOf('#/project/') === 0 ? 'projects' :
-        hash.indexOf('#/admin') === 0 ? 'admin' :
-          hash.indexOf('#/search') === 0 ? 'search' : 'dashboard';
+    hash.indexOf('#/project/') === 0 ? 'projects' :
+    hash.indexOf('#/admin') === 0 ? 'admin' :
+    hash.indexOf('#/search') === 0 ? 'search' : 'dashboard';
   document.querySelectorAll('.side-link').forEach(function (a) {
     a.classList.toggle('side-link--active', a.getAttribute('data-nav') === key);
   });
@@ -231,7 +239,13 @@ function wireHeaderSuggestions() {
     render(q.length >= 1 ? suggestionsFor(q) : []);
   });
   input.addEventListener('focus', function () { if (input.value.trim()) render(suggestionsFor(input.value.trim())); });
-  document.addEventListener('click', function (e) { if (!e.target.closest('#global-search')) menu.hidden = true; });
+  // renderShell() লগইন/লগআউটের সময় আবার চলে, ফলে পুরনো header re-create হয় — সেই
+  // পুরনো (detached) input-কে রেফারেন্স করা listener যাতে জমে না থাকে, তাই এখানেও
+  // একই self-cleaning guard (mountSearchableSelect-এর মতো)।
+  document.addEventListener('click', function outsideClick(e) {
+    if (!document.body.contains(input)) { document.removeEventListener('click', outsideClick); return; }
+    if (!e.target.closest('#global-search')) menu.hidden = true;
+  });
 }
 
 function renderUserSlot() {
@@ -327,20 +341,7 @@ function emptyStateHtml(title, subtitle) {
 }
 
 function errorStateHtml(message) {
-  var isNetwork = /network|fetch|failed to fetch|load|timeout|abort/i.test(message);
-  var isSession = /session|expired|sign.in/i.test(message);
-  var heading = isNetwork ? '🌐 Connection Error' : isSession ? '🔒 Session Expired' : '⚠️ Something went wrong';
-  var hint = isNetwork ? 'Please check your internet connection and try again.'
-    : isSession ? 'Your session has expired. Please sign in again.'
-      : escapeHtml(message);
-  return '<div class="empty-state empty-state--error">' +
-    '<div class="empty-state__icon">' + icon('close') + '</div>' +
-    '<h3>' + heading + '</h3>' +
-    '<p class="muted">' + hint + '</p>' +
-    '<div class="btn-row" style="justify-content:center;margin-top:12px">' +
-    '<button class="btn btn--primary btn--sm" onclick="router()">' + icon('refresh') + ' Retry</button>' +
-    (isSession ? '<button class="btn btn--ghost btn--sm" onclick="openLoginModal()">' + icon('logout') + ' Sign in</button>' : '') +
-    '</div></div>';
+  return '<div class="empty-state empty-state--error"><div class="empty-state__icon">' + icon('close') + '</div><h3>⚠️ Something went wrong</h3><p class="muted">' + escapeHtml(message) + '</p><button class="btn btn--ghost" onclick="router()">' + icon('refresh') + ' Try again</button></div>';
 }
 
 function errorHtml(message) { return errorStateHtml(message); }
@@ -349,125 +350,89 @@ function errorHtml(message) { return errorStateHtml(message); }
 
 function viewHome() {
   mount(loadingHtml('ড্যাশবোর্ড লোড হচ্ছে...'), 'dashboard');
-
   Promise.all([Api.get('dashboardStats', {}), ensureSearchIndexLoaded()])
     .then(function (res) {
       var stats = res[0] || {};
-      var projects = State.allProjects || [];
       var contractors = State.allContractors || [];
-      var user = Auth.getUser() || { role: 'public', name: 'Guest' };
+      var projects = State.allProjects || [];
+      var user = Auth.getUser();
       var isStaff = user.role === 'admin' || user.role === 'moderator';
-
-      /* DashboardStats is the preferred source, but keep the dashboard usable
-         when the backend does not provide derived counts. */
-      var activeProjects = projects.filter(function (p) {
-        var s = String(p.status || '').toLowerCase();
-        return s.indexOf('active') !== -1 || s.indexOf('ongoing') !== -1 || s.indexOf('progress') !== -1;
-      }).length;
-      var completedProjects = projects.filter(function (p) {
-        return String(p.status || '').toLowerCase().indexOf('complete') !== -1;
-      }).length;
-
       var statusMap = {};
       projects.forEach(function (p) {
-        var status = String(p.status || 'Unknown');
+        var status = p.status || 'Unknown';
         statusMap[status] = (statusMap[status] || 0) + 1;
       });
-      var statusEntries = Object.keys(statusMap).sort(function (a, b) {
-        return statusMap[b] - statusMap[a];
-      });
+      var statusEntries = Object.keys(statusMap).sort(function (a,b) { return statusMap[b] - statusMap[a]; }).slice(0, 5);
+      var recentProjects = projects.slice(0, 6);
+      var activeProjects = projects.filter(function (p) { return /active|ongoing|progress/i.test(p.status || ''); }).length;
+      var completedProjects = projects.filter(function (p) { return /complete|completed/i.test(p.status || ''); }).length;
+      if (!activeProjects && stats.totalProjects) activeProjects = Math.max(0, Number(stats.totalProjects) - completedProjects);
 
-      var recentProjects = projects.slice().sort(function (a, b) {
-        var ad = new Date(a.updatedAt || a.modifiedAt || a.createdAt || 0).getTime();
-        var bd = new Date(b.updatedAt || b.modifiedAt || b.createdAt || 0).getTime();
-        return bd - ad;
-      }).slice(0, 8);
+      // Contractor Network এখন হোমপেজের সবচেয়ে উপরের দিকে (welcome banner-এর ঠিক পরে) —
+      // যাতে পেজ খোলার সাথে সাথেই দ্রুত দেখা যায়। "Contractors" পাতার সিগনেচার
+      // plate-card পুনর্ব্যবহার করা হয়েছে (কোনো নতুন duplicate কার্ড স্টাইল না বানিয়ে)।
+      var visibleContractors = contractors.slice(0, 8);
 
       var html =
         '<div class="dashboard-shell">' +
         '  <section class="dashboard-welcome">' +
-        '    <div><span class="dashboard-kicker">CONSTRUCTION INTELLIGENCE PLATFORM</span><h1>' + greetingForDashboard(user) + ', ' + escapeHtml(user.name || 'Guest') + '! <span>👋</span></h1><p>Here\'s what\'s happening with your construction projects today.</p></div>' +
-        (isStaff ? '<div class="dashboard-actions"><button class="dash-btn dash-btn--blue" id="dash-add-btn">' + icon('plus') + ' New Project</button></div>' : '') +
+        '    <div><span class="dashboard-kicker">CONSTRUCTION INTELLIGENCE PLATFORM</span><h1>Good morning, ' + escapeHtml(user.name || 'Admin') + '! <span>👋</span></h1><p>Here’s what’s happening with your construction projects today.</p></div>' +
+        (isStaff ? '    <div class="dashboard-actions"><button class="dash-btn dash-btn--blue" id="dash-add-btn">' + icon('plus') + ' Add Project</button></div>' : '') +
+        '  </section>' +
+        '  <section class="contractor-network-hero">' +
+        '    <div class="cn-hero-head">' +
+        '      <div><span class="dashboard-kicker">LIVE NETWORK</span><h2>Contractor Network</h2><p>Live contractor coverage across all active projects</p></div>' +
+        '      <div class="cn-hero-right">' +
+        '        <div class="cn-hero-stat"><strong>' + escapeHtml(contractors.length) + '</strong><span>Contractors</span></div>' +
+        '        <a href="#/contractors" class="network-button">' + icon('users') + ' View All <span>›</span></a>' +
+        '      </div>' +
+        '    </div>' +
+        (visibleContractors.length
+          ? '<div class="cn-hero-grid">' + visibleContractors.map(plateCard).join('') + '</div>'
+          : '<div class="muted">এখনো কোনো contractor যোগ করা হয়নি।</div>') +
+        (contractors.length > 8 ? '<button class="more-contractors" id="more-contractors-btn">+' + (contractors.length - 8) + ' more contractors</button>' : '') +
         '  </section>' +
         '  <section class="kpi-grid">' +
-        dashboardKpi('building', stats.totalProjects != null ? stats.totalProjects : projects.length, 'Total Projects', 'blue', 'Projects in portal') +
-        dashboardKpi('activity', activeProjects, 'Active Projects', 'green', 'Currently in progress') +
-        dashboardKpi('check', completedProjects, 'Completed Projects', 'amber', 'Completed records') +
-        dashboardKpi('users', stats.totalContractors != null ? stats.totalContractors : contractors.length, 'Total Contractors', 'purple', 'Contractor network') +
-        dashboardKpi('doc', stats.totalDocuments != null ? stats.totalDocuments : countFiles(projects, 'doc'), 'Total Documents', 'red', 'Managed documents') +
-        '  </section>' +
-        '  <section class="dashboard-panel contractor-network-panel">' +
-        '    <div class="panel-head"><div><h2>' + icon('users') + ' Contractor Network</h2><p>' + contractors.length + ' contractors connected — Live coverage</p></div><a href="#/contractors" class="mini-action" id="open-contractors-btn">' + icon('users') + ' View All <span>›</span></a></div>' +
-        '    <div class="contractor-network-grid">' +
-        contractors.slice(0, 8).map(function (c) {
-          return '<a href="#/contractor/' + encodeURIComponent(c.contractorId) + '" class="contractor-net-card">' +
-            '<span class="contractor-net-avatar">' + escapeHtml((c.contractorName || 'C').charAt(0).toUpperCase()) + '</span>' +
-            '<div class="contractor-net-info"><strong>' + escapeHtml(c.contractorName) + '</strong><small class="mono">' + escapeHtml(c.contractorId) + '</small></div>' +
-            '<div class="contractor-net-stats"><span>' + icon('building') + ' ' + (c.projectCount || 0) + '</span><span>' + icon('doc') + ' ' + (c.fileCount || 0) + '</span></div>' +
-            '<span class="contractor-net-arrow">→</span>' +
-            '</a>';
-        }).join('') +
-        (contractors.length > 8 ? '<a href="#/contractors" class="contractor-net-card contractor-net-card--more"><span class="contractor-net-more-icon">' + icon('plus') + '</span><strong>+' + (contractors.length - 8) + ' more</strong><small>View all contractors</small></a>' : '') +
-        (contractors.length === 0 ? '<div class="muted">No contractor records available.</div>' : '') +
-        '    </div>' +
-        '  </section>' +
+          dashboardKpi('building', stats.totalProjects, 'Total Projects', 'blue', 'Projects in portal') +
+          dashboardKpi('activity', activeProjects, 'Active Projects', 'green', 'Currently in progress') +
+          dashboardKpi('check', completedProjects, 'Completed Projects', 'amber', 'Completed records') +
+          dashboardKpi('users', stats.totalContractors, 'Total Contractors', 'purple', 'Contractor network') +
+          dashboardKpi('doc', stats.totalDocuments, 'Total Documents', 'red', 'Managed documents') +
+        '</section>' +
         '  <section class="dashboard-grid dashboard-grid--main">' +
         '    <div class="dashboard-panel quick-panel"><div class="panel-head"><div><h2>Quick Access</h2><p>Frequently used actions</p></div></div><div class="quick-grid">' +
-        quickAccessCard('building', 'blue', 'All Projects', 'View all projects', '#/search/projects') +
-        quickAccessCard('users', 'green', 'Contractors', 'Manage contractors', '#/contractors') +
-        quickAccessCard('doc', 'amber', 'Documents', 'All documents', '#/search/documents') +
-        quickAccessCard('camera', 'purple', 'Photos', 'Project photos', '#/search/photos') +
-        quickAccessCard('grid', 'cyan', 'Categories', 'Project categories', '#/search/categories') +
+          quickAccessCard('building','blue','All Projects','View all projects','#/search/projects') +
+          quickAccessCard('users','green','Contractors','Manage contractors','#/contractors') +
+          quickAccessCard('doc','amber','Documents','All documents','#/search/documents') +
+          quickAccessCard('camera','purple','Photos','Project photos','#/search/photos') +
+          quickAccessCard('grid','cyan','Categories','Project categories','#/search/categories') +
         '</div></div>' +
         '    <div class="dashboard-panel activity-panel"><div class="panel-head"><div><h2>Management Snapshot</h2><p>Live data overview</p></div><button class="panel-link" id="view-all-search">View All</button></div>' +
-        '<div class="snapshot-list">' +
-        '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--blue">' + icon('building') + '</span><div><strong>' + escapeHtml(stats.totalProjects != null ? stats.totalProjects : projects.length) + ' Projects</strong><small>Available in the live project index</small></div></div>' +
-        '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--green">' + icon('users') + '</span><div><strong>' + escapeHtml(stats.totalContractors != null ? stats.totalContractors : contractors.length) + ' Contractors</strong><small>Connected to the project network</small></div></div>' +
-        '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--amber">' + icon('upload') + '</span><div><strong>' + escapeHtml(stats.todaysUploads || 0) + ' Today\'s Uploads</strong><small>Documents and photos uploaded today</small></div></div>' +
-        '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--red">' + icon('doc') + '</span><div><strong>' + escapeHtml(stats.totalDocuments != null ? stats.totalDocuments : countFiles(projects, 'doc')) + ' Documents</strong><small>Available across project records</small></div></div>' +
-        '</div></div>' +
+          '<div class="snapshot-list">' +
+            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--blue">' + icon('building') + '</span><div><strong>' + escapeHtml(stats.totalProjects || 0) + ' Projects</strong><small>Available in the live project index</small></div></div>' +
+            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--green">' + icon('users') + '</span><div><strong>' + escapeHtml(stats.totalContractors || 0) + ' Contractors</strong><small>Connected to the project network</small></div></div>' +
+            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--amber">' + icon('upload') + '</span><div><strong>' + escapeHtml(stats.todaysUploads || 0) + ' Today’s Uploads</strong><small>Documents and photos uploaded today</small></div></div>' +
+            '<div class="snapshot-item"><span class="snapshot-icon snapshot-icon--red">' + icon('doc') + '</span><div><strong>' + escapeHtml(stats.totalDocuments || 0) + ' Documents</strong><small>Available across project records</small></div></div>' +
+          '</div>' +
+        '    </div>' +
         '  </section>' +
-        '  <section class="dashboard-grid dashboard-grid--status">' +
-        '    <div class="dashboard-panel"><div class="panel-head"><div><h2>Projects at a Glance</h2><p>Overview of current project status</p></div></div><div class="status-grid">' +
-        (statusEntries.length ? statusEntries.map(function (status, i) { return statusCard(status, statusMap[status], i); }).join('') : '<div class="muted">No project status data available.</div>') +
-        '</div></div>' +
-        '  </section>' +
+        '  <section class="dashboard-panel status-panel-full"><div class="panel-head"><div><h2>Projects at a Glance</h2><p>Overview of current project status</p></div></div><div class="status-grid">' +
+          (statusEntries.length ? statusEntries.map(function (s, i) { return statusCard(s, statusMap[s], i); }).join('') : '<div class="muted">No project status data available.</div>') +
+        '</div></section>' +
         '  <section class="project-network-head"><div><h2>Project Network</h2><p>Recent project records from live data</p></div><a href="#/contractors" class="network-button">' + icon('users') + ' Contractors <span>›</span></a></section>' +
         '  <section class="dashboard-panel recent-projects-panel"><div class="panel-head"><div><h2>Recent Projects</h2><p>Project index overview</p></div><a href="#/search/projects" class="panel-link">View All Projects</a></div>' +
         '    <div class="responsive-table"><table class="premium-table"><thead><tr><th>Project ID</th><th>Project Name</th><th>Contractor</th><th>Status</th><th>Documents</th><th>Photos</th><th></th></tr></thead><tbody>' +
-        (recentProjects.length ? recentProjects.map(function (p) {
-          return '<tr><td class="mono strong-id">' + escapeHtml(p.projectId) + '</td><td><strong>' + escapeHtml(p.projectName || p.projectId) + '</strong></td><td>' + escapeHtml(p.contractorName || p.contractorId || '—') + '</td><td><span class="status-pill ' + statusClass(p.status) + '">' + escapeHtml(p.status || 'Unknown') + '</span></td><td>' + escapeHtml(p.docCount || 0) + '</td><td>' + escapeHtml(p.photoCount || 0) + '</td><td><a class="row-action" href="#/project/' + encodeURIComponent(p.projectId) + '" aria-label="Open project">›</a></td></tr>';
-        }).join('') : '<tr><td colspan="7" class="table-empty">No project records available.</td></tr>') +
+          (recentProjects.length ? recentProjects.map(function (p) { return '<tr><td class="mono strong-id">' + escapeHtml(p.projectId) + '</td><td><strong>' + escapeHtml(p.projectName || p.projectId) + '</strong></td><td>' + escapeHtml(p.contractorName || p.contractorId || '—') + '</td><td><span class="status-pill ' + statusClass(p.status) + '">' + escapeHtml(p.status || 'Unknown') + '</span></td><td>' + escapeHtml(p.docCount || 0) + '</td><td>' + escapeHtml(p.photoCount || 0) + '</td><td><a class="row-action" href="#/project/' + encodeURIComponent(p.projectId) + '" aria-label="Open project">›</a></td></tr>'; }).join('') : '<tr><td colspan="7" class="table-empty">No project records available.</td></tr>') +
         '</tbody></table></div></section>' +
-        '</div>';
+        '  </div>';
 
       mount(html, 'dashboard');
-
       var addBtn = document.getElementById('dash-add-btn');
       if (addBtn) addBtn.addEventListener('click', function () { openNewSystemModal(); });
-
-      var viewAll = document.getElementById('view-all-search');
-      if (viewAll) viewAll.addEventListener('click', function () { location.hash = '#/search'; });
-
-      var contractorsBtn = document.getElementById('open-contractors-btn');
-      if (contractorsBtn) contractorsBtn.addEventListener('click', function () { location.hash = '#/contractors'; });
+      document.getElementById('view-all-search').addEventListener('click', function () { location.hash = '#/search'; });
+      var more = document.getElementById('more-contractors-btn'); if (more) more.addEventListener('click', function () { location.hash = '#/contractors'; });
     })
-    .catch(function (err) {
-      mount(errorHtml(err && err.message ? err.message : String(err)), 'dashboard');
-    });
-}
-
-function greetingForDashboard(user) {
-  var hour = new Date().getHours();
-  return hour < 12 ? 'Good morning' : hour < 17 ? 'Good afternoon' : 'Good evening';
-}
-
-function countFiles(projects, kind) {
-  var total = 0;
-  projects.forEach(function (p) {
-    total += kind === 'doc' ? Number(p.docCount || 0) : Number(p.photoCount || 0);
-  });
-  return total;
+    .catch(function (err) { mount(errorHtml(err.message), 'dashboard'); });
 }
 
 function dashboardKpi(iconName, value, label, tone, meta) {
@@ -477,7 +442,7 @@ function quickAccessCard(iconName, tone, title, subtitle, href) {
   return '<a class="quick-card quick-card--' + tone + '" href="' + href + '"><span class="quick-card__icon">' + icon(iconName) + '</span><strong>' + escapeHtml(title) + '</strong><small>' + escapeHtml(subtitle) + '</small></a>';
 }
 function statusCard(label, count, index) {
-  var tones = ['blue', 'green', 'amber', 'purple', 'red'];
+  var tones = ['blue','green','amber','purple','red'];
   var tone = tones[index % tones.length];
   return '<div class="status-card status-card--' + tone + '"><span>' + escapeHtml(label) + '</span><strong>' + escapeHtml(count) + '</strong><small>Projects</small></div>';
 }
@@ -550,7 +515,7 @@ function viewContractor(contractorId) {
         (projects.length === 0 && !canCreateProject
           ? '<div class="empty-state"><p>এখনো কোনো প্রজেক্ট তৈরি হয়নি।</p></div>'
           : '<section class="project-grid">' + projects.map(projectBadge).join('') +
-          (canCreateProject ? addProjectTileHtml() : '') + '</section>')
+            (canCreateProject ? addProjectTileHtml() : '') + '</section>')
       );
 
       if (canCreateProject) {
@@ -592,10 +557,10 @@ function openNewSystemModal(defaultContractorId) {
     // প্রতিষ্ঠানের নাম fixed/read-only হিসেবে দেখানো হয় (backend-ও এটাই enforce করে)
     var contractorFieldHtml = isSelfContractor
       ? '<label>Contractor<input type="text" value="' + escapeHtml(user.contractorName || '') + '" disabled></label>' +
-      '<input type="hidden" name="contractorId" value="' + escapeHtml(user.contractorId) + '">'
+        '<input type="hidden" name="contractorId" value="' + escapeHtml(user.contractorId) + '">'
       : '<label>Contractor<select name="contractorId" required>' +
-      contractors.map(function (c) { return '<option value="' + escapeHtml(c.contractorId) + '"' + (c.contractorId === defaultContractorId ? ' selected' : '') + '>' + escapeHtml(c.contractorName) + '</option>'; }).join('') +
-      '</select></label>';
+        contractors.map(function (c) { return '<option value="' + escapeHtml(c.contractorId) + '"' + (c.contractorId === defaultContractorId ? ' selected' : '') + '>' + escapeHtml(c.contractorName) + '</option>'; }).join('') +
+        '</select></label>';
 
     var node = el(
       '<div class="modal">' +
@@ -636,7 +601,9 @@ function openNewSystemModal(defaultContractorId) {
   if (isSelfContractor) {
     render([]); // dropdown লাগবে না, তাই পুরো contractor list আনার দরকার নেই
   } else {
-    Api.get('listContractors', {}).then(render);
+    // homepage/search ইতিমধ্যেই এই লিস্ট cache করে রাখে (ensureSearchIndexLoaded) —
+    // মোডাল খোলার জন্য সেটা আবার আলাদা করে সার্ভার থেকে আনার দরকার নেই।
+    ensureSearchIndexLoaded().then(function () { render(State.allContractors || []); });
   }
 }
 
@@ -847,12 +814,11 @@ function handleFiles(fileList, projectId, category) {
 
     Promise.all([compressImageForUpload(file), makeThumbnail(file)])
       .then(function (res) {
-        var main = res[0], thumbResult = res[1];
+        var main = res[0], thumbBase64 = res[1];
         return Api.post('uploadFile', {
           projectId: projectId, category: category, fileName: main.fileName,
           mimeType: main.mimeType, fileData: main.base64,
-          thumbnailData: thumbResult ? thumbResult.base64 : undefined,
-          thumbnailMimeType: thumbResult ? thumbResult.mimeType : undefined
+          thumbnailData: thumbBase64 || undefined
         });
       })
       .then(function () {
@@ -1023,7 +989,16 @@ function openQuickView(items, idx) {
   document.body.appendChild(node);
   document.body.style.overflow = 'hidden';
 
-  function close() { node.remove(); document.body.style.overflow = ''; }
+  // আগে এই keydown listener শুধু Escape চাপলে সরানো হতো — কিন্তু বেশিরভাগ ইউজারই ×
+  // (close) বাটনে ক্লিক করে বন্ধ করেন, তখন listener কখনো সরত না। ফলে প্রতিটা Quick
+  // View খোলা-বন্ধ করায় একটা করে permanent listener জমত (ArrowLeft/Right/Escape
+  // পুরো অ্যাপ জুড়ে কাজ করত, এমনকি lightbox বন্ধ হয়ে যাওয়ার পরেও) — আসল memory leak।
+  // এখন close()-এর সব পথেই (× বাটন, Escape) removeEventListener নিশ্চিত হয়।
+  function close() {
+    node.remove();
+    document.body.style.overflow = '';
+    document.removeEventListener('keydown', onKeydown);
+  }
 
   function show(i) {
     idx = (i + items.length) % items.length;
@@ -1074,15 +1049,16 @@ function openQuickView(items, idx) {
     });
   }
 
+  function onKeydown(e) {
+    if (e.key === 'Escape') close();
+    else if (e.key === 'ArrowLeft') show(idx - 1);
+    else if (e.key === 'ArrowRight') show(idx + 1);
+  }
+
   node.querySelector('.lightbox__close').addEventListener('click', close);
   node.querySelector('.lightbox__prev').addEventListener('click', function () { show(idx - 1); });
   node.querySelector('.lightbox__next').addEventListener('click', function () { show(idx + 1); });
-  function onKey(e) {
-    if (e.key === 'Escape') { close(); document.removeEventListener('keydown', onKey); }
-    if (e.key === 'ArrowLeft') show(idx - 1);
-    if (e.key === 'ArrowRight') show(idx + 1);
-  }
-  document.addEventListener('keydown', onKey);
+  document.addEventListener('keydown', onKeydown);
   show(idx);
 }
 
@@ -1280,28 +1256,33 @@ function adminDashboardTab() {
       statCard('building', s.totalContractors, 'Contractors') + statCard('doc', s.totalProjects, 'Projects') +
       statCard('camera', s.totalPhotos, 'Photos') + statCard('doc', s.totalDocuments, 'Documents') + statCard('upload', s.todaysUploads, "Today's Uploads") +
       '</section>' +
-      '<table class="data-table"><thead><tr><th>Contractor</th><th>Projects</th><th>Photos</th><th>Documents</th></tr></thead><tbody>' +
+      '<div class="responsive-table"><table class="data-table"><thead><tr><th>Contractor</th><th>Projects</th><th>Photos</th><th>Documents</th></tr></thead><tbody>' +
       s.contractorStats.map(function (c) { return '<tr><td>' + escapeHtml(c.contractorName) + '</td><td>' + c.projects + '</td><td>' + c.photos + '</td><td>' + c.documents + '</td></tr>'; }).join('') +
-      '</tbody></table>';
+      '</tbody></table></div>';
   }).catch(function (err) { box.innerHTML = errorHtml(err.message); });
 }
 
 function adminContractorsTab() {
   var box = document.getElementById('admin-content');
-  Api.get('listContractors', {}).then(function (list) {
+  // আগে এখানে সরাসরি Api.get('listContractors') কল হতো — যেটা homepage/search-এ
+  // ensureSearchIndexLoaded() থেকে লোড হওয়া একই ডেটা আবার আলাদাভাবে সার্ভার থেকে
+  // আনত (duplicate read, §৫/§৯)। এখন শেয়ার্ড cache ব্যবহার করা হয়, এবং প্রতিটা
+  // mutation-এর পরে ইতিমধ্যেই refreshSearchIndex() কল হয় বলে ডেটা সবসময় সাম্প্রতিক থাকে।
+  ensureSearchIndexLoaded().then(function () {
+    var list = State.allContractors || [];
     box.innerHTML =
       '<div class="section-head"><h2></h2><button class="btn btn--primary btn--sm" id="add-c-btn">' + icon('plus') + ' Add Contractor</button></div>' +
-      '<table class="data-table"><thead><tr><th>ID</th><th>Name</th><th>Projects</th><th>Files</th><th>Status</th><th></th></tr></thead><tbody>' +
+      '<div class="responsive-table"><table class="data-table"><thead><tr><th>ID</th><th>Name</th><th>Projects</th><th>Files</th><th>Status</th><th></th></tr></thead><tbody>' +
       list.map(function (c) {
         return '<tr><td class="mono">' + escapeHtml(c.contractorId) + '</td><td>' + escapeHtml(c.contractorName) + '</td><td>' + c.projectCount + '</td><td>' + c.fileCount + '</td>' +
           '<td><span class="badge ' + (c.status === 'Disabled' ? 'badge--muted' : 'badge--active') + '">' + escapeHtml(c.status) + '</span></td>' +
           '<td><button class="btn btn--ghost btn--sm" data-toggle-c="' + escapeHtml(c.contractorId) + '" data-status="' + (c.status === 'Disabled' ? 'Active' : 'Disabled') + '">' + (c.status === 'Disabled' ? 'Enable' : 'Disable') + '</button></td></tr>';
-      }).join('') + '</tbody></table>';
+      }).join('') + '</tbody></table></div>';
     document.getElementById('add-c-btn').addEventListener('click', openAddContractorModal);
     box.querySelectorAll('[data-toggle-c]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         Api.post('setContractorStatus', { contractorId: btn.getAttribute('data-toggle-c'), status: btn.getAttribute('data-status') })
-          .then(function () { refreshSearchIndex(); adminContractorsTab(); }).catch(function (err) { Toast.error(err.message); });
+          .then(function () { refreshSearchIndex().then(adminContractorsTab); }).catch(function (err) { Toast.error(err.message); });
       });
     });
   }).catch(function (err) { box.innerHTML = errorHtml(err.message); });
@@ -1324,19 +1305,21 @@ function openAddContractorModal() {
 
 function adminProjectsTab() {
   var box = document.getElementById('admin-content');
-  Promise.all([Api.get('listProjects', {}), Api.get('listContractors', {})]).then(function (res) {
-    var projects = res[0], contractors = res[1];
+  // adminContractorsTab-এর মতো, এখানেও আগে Api.get('listProjects')+Api.get('listContractors')
+  // সরাসরি কল হতো (duplicate reads) — এখন শেয়ার্ড cache পুনর্ব্যবহার হয়।
+  ensureSearchIndexLoaded().then(function () {
+    var projects = State.allProjects || [], contractors = State.allContractors || [];
     var byId = {}; contractors.forEach(function (c) { byId[c.contractorId] = c.contractorName; });
     box.innerHTML =
       '<div class="section-head"><h2></h2><button class="btn btn--primary btn--sm" id="add-p-btn">' + icon('plus') + ' New System</button></div>' +
-      '<table class="data-table"><thead><tr><th>Project ID</th><th>Contractor</th><th>Name</th><th>Files</th><th>Status</th><th></th></tr></thead><tbody>' +
+      '<div class="responsive-table"><table class="data-table"><thead><tr><th>Project ID</th><th>Contractor</th><th>Name</th><th>Files</th><th>Status</th><th></th></tr></thead><tbody>' +
       projects.map(function (p) {
         return '<tr><td class="mono"><a href="#/project/' + encodeURIComponent(p.projectId) + '">' + escapeHtml(p.projectId) + '</a></td>' +
           '<td>' + escapeHtml(byId[p.contractorId] || p.contractorId) + '</td><td>' + escapeHtml(p.projectName) + '</td><td>' + p.fileCount + '</td>' +
           '<td><span class="badge ' + (p.status === 'Archived' ? 'badge--muted' : 'badge--active') + '">' + escapeHtml(p.status) + '</span></td>' +
           '<td class="btn-row"><button class="icon-btn" data-edit-p="' + escapeHtml(p.projectId) + '" data-name="' + escapeHtml(p.projectName) + '" title="Edit">' + icon('edit') + '</button>' +
           '<button class="btn btn--ghost btn--sm" data-archive-p="' + escapeHtml(p.projectId) + '" data-status="' + (p.status === 'Archived' ? 'Active' : 'Archived') + '">' + (p.status === 'Archived' ? 'Unarchive' : 'Archive') + '</button></td></tr>';
-      }).join('') + '</tbody></table>';
+      }).join('') + '</tbody></table></div>';
     document.getElementById('add-p-btn').addEventListener('click', function () { openNewSystemModal(''); });
     box.querySelectorAll('[data-edit-p]').forEach(function (btn) {
       btn.addEventListener('click', function () { openEditProjectModal(btn.getAttribute('data-edit-p'), btn.getAttribute('data-name')); });
@@ -1344,7 +1327,7 @@ function adminProjectsTab() {
     box.querySelectorAll('[data-archive-p]').forEach(function (btn) {
       btn.addEventListener('click', function () {
         Api.post('archiveProject', { projectId: btn.getAttribute('data-archive-p'), status: btn.getAttribute('data-status') })
-          .then(function () { refreshSearchIndex(); adminProjectsTab(); }).catch(function (err) { Toast.error(err.message); });
+          .then(function () { refreshSearchIndex().then(adminProjectsTab); }).catch(function (err) { Toast.error(err.message); });
       });
     });
   }).catch(function (err) { box.innerHTML = errorHtml(err.message); });
@@ -1362,13 +1345,13 @@ function adminUsersTab() {
   Api.get('listUsers', {}).then(function (users) {
     box.innerHTML =
       '<div class="section-head"><h2></h2><button class="btn btn--primary btn--sm" id="add-u-btn">' + icon('plus') + ' Add User</button></div>' +
-      '<table class="data-table"><thead><tr><th>Email</th><th>Role</th><th>Contractor</th><th>Status</th><th></th></tr></thead><tbody>' +
+      '<div class="responsive-table"><table class="data-table"><thead><tr><th>Email</th><th>Role</th><th>Contractor</th><th>Status</th><th></th></tr></thead><tbody>' +
       users.map(function (u) {
         return '<tr><td>' + escapeHtml(u.email) + '</td><td>' + roleDisplayLabel(u.role) + '</td><td>' + escapeHtml(u.contractorName) + '</td>' +
           '<td><span class="badge ' + (u.status === 'Disabled' ? 'badge--muted' : 'badge--active') + '">' + escapeHtml(u.status) + '</span></td>' +
           '<td class="btn-row"><button class="icon-btn" data-edit-u="' + escapeHtml(u.email) + '" data-role="' + escapeHtml(u.role) + '" data-cid="' + escapeHtml(u.contractorId) + '" title="Edit">' + icon('edit') + '</button>' +
           '<button class="btn btn--ghost btn--sm" data-toggle-u="' + escapeHtml(u.email) + '" data-status="' + (u.status === 'Disabled' ? 'Active' : 'Disabled') + '">' + (u.status === 'Disabled' ? 'Enable' : 'Disable') + '</button></td></tr>';
-      }).join('') + '</tbody></table>';
+      }).join('') + '</tbody></table></div>';
     document.getElementById('add-u-btn').addEventListener('click', function () { openAddUserModal(); });
     box.querySelectorAll('[data-edit-u]').forEach(function (btn) {
       btn.addEventListener('click', function () {
@@ -1385,9 +1368,8 @@ function adminUsersTab() {
 }
 
 function openAddUserModal() {
-  // Reuse cached contractors if available to avoid extra API call
-  var contractorPromise = State.allContractors ? Promise.resolve(State.allContractors) : Api.get('listContractors', {});
-  contractorPromise.then(function (contractors) {
+  ensureSearchIndexLoaded().then(function () {
+    var contractors = State.allContractors || [];
     var node = el(
       '<div class="modal modal--sm"><div class="modal__head"><h3>Add User</h3><button class="icon-btn modal-close">' + icon('close') + '</button></div>' +
       '<div class="modal__body"><form id="add-u-form">' +
@@ -1410,8 +1392,8 @@ function openAddUserModal() {
 }
 
 function openEditUserModal(email, currentRole, currentContractorId) {
-  var contractorPromise = State.allContractors ? Promise.resolve(State.allContractors) : Api.get('listContractors', {});
-  contractorPromise.then(function (contractors) {
+  ensureSearchIndexLoaded().then(function () {
+    var contractors = State.allContractors || [];
     var node = el(
       '<div class="modal modal--sm"><div class="modal__head"><h3>Edit User</h3><button class="icon-btn modal-close">' + icon('close') + '</button></div>' +
       '<div class="modal__body"><form id="edit-u-form">' +
@@ -1450,10 +1432,10 @@ function adminAuditLogTab() {
     table.innerHTML = loadingHtml();
     Api.get('listAuditLog', params).then(function (rows) {
       if (!rows.length) { table.innerHTML = '<div class="empty-state"><p>কোনো লগ পাওয়া যায়নি।</p></div>'; return; }
-      table.innerHTML = '<table class="data-table mono-table"><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Project</th><th>File</th><th>Details</th></tr></thead><tbody>' +
+      table.innerHTML = '<div class="responsive-table"><table class="data-table mono-table"><thead><tr><th>Time</th><th>User</th><th>Action</th><th>Project</th><th>File</th><th>Details</th></tr></thead><tbody>' +
         rows.map(function (r) {
           return '<tr><td>' + formatDate(r.timestamp) + '</td><td>' + escapeHtml(r.user) + '</td><td>' + escapeHtml(r.action) + '</td><td>' + escapeHtml(r.projectId) + '</td><td>' + escapeHtml(r.fileName) + '</td><td>' + escapeHtml(r.details) + '</td></tr>';
-        }).join('') + '</tbody></table>';
+        }).join('') + '</tbody></table></div>';
     }).catch(function (err) { table.innerHTML = errorHtml(err.message); });
   }
   document.getElementById('a-refresh').addEventListener('click', load);

@@ -31,19 +31,30 @@ var Api = (function () {
     }
 
     return fetch(url, opts)
-      .then(function (r) { return r.json(); })
+      .catch(function () {
+        // fetch() নিজেই reject করে শুধু তখন যখন নেটওয়ার্ক সম্পূর্ণ ব্যর্থ হয় (অফলাইন/DNS/CORS) —
+        // raw "Failed to fetch"-এর বদলে একটা স্পষ্ট, বোধগম্য বার্তায় রূপান্তর করা হয়
+        // (§১০: Network error gracefully handle করা)।
+        throw new Error('নেটওয়ার্ক error — ইন্টারনেট সংযোগ চেক করে আবার চেষ্টা করুন।');
+      })
+      .then(function (r) {
+        // r.json() সরাসরি ব্যবহার না করে আগে raw text নেওয়া হয়, কারণ Apps Script
+        // execution timeout/quota-এর মতো বিরল ক্ষেত্রে HTML error page ফেরত দিতে পারে
+        // (আমাদের নিজস্ব JSON ফরম্যাটে না) — তখন JSON.parse ব্যর্থ হলে একটা পরিষ্কার
+        // বার্তা দেখানো হয়, cryptic "Unexpected token <" এর বদলে।
+        return r.text().then(function (text) {
+          var res;
+          try { res = JSON.parse(text); }
+          catch (e) { throw new Error('সার্ভার থেকে অপ্রত্যাশিত রেসপন্স এসেছে (HTTP ' + r.status + ')। কিছুক্ষণ পর আবার চেষ্টা করুন।'); }
+          return res;
+        });
+      })
       .then(function (res) {
         if (!res.ok) {
           if (res.error && res.error.indexOf('SESSION_EXPIRED') === 0) handleSessionExpired_();
           throw new Error(res.error || 'Unknown error');
         }
         return res.data;
-      })
-      .catch(function (err) {
-        if (err.name === 'TypeError' || err.message === 'Failed to fetch') {
-          throw new Error('Network error: Failed to connect to server. Check your connection.');
-        }
-        throw err;
       });
   }
 
