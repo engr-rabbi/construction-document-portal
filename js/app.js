@@ -922,23 +922,15 @@ function loadFileArea(filters, canDelete) {
   area.innerHTML = loadingHtml('ফাইল লোড হচ্ছে...');
   Api.get('listFiles', filters).then(function (allFiles) {
     if (allFiles.length === 0) { area.innerHTML = emptyStateHtml('🔍 No Results Found', "We couldn't find any file matching your filters. Try a different name, category or date range."); return; }
-    var images = allFiles.filter(function (f) { return f.isImage; });
-    var docs = allFiles.filter(function (f) { return !f.isImage; });
-
-    area.innerHTML =
-      (images.length ? '<div class="gallery-grid">' + images.map(function (f) { return galleryTile(f, allFiles.indexOf(f), canDelete); }).join('') + '</div>' : '') +
-      (docs.length ? '<div class="doc-list">' + docs.map(function (f) { return docRow(f, allFiles.indexOf(f), canDelete); }).join('') + '</div>' : '');
-
-    wireGalleryLazyThumbs();
-    wireQuickViewClicks(area, allFiles);
-    wireDeleteButtons(area, function () { loadFileArea(filters, true); });
-    wireDownloadButtons(area);
+    area.innerHTML = fileResultsHtml(allFiles, canDelete, false);
+    wireFileResults(area, allFiles, canDelete, function () { loadFileArea(filters, true); });
   }).catch(function (err) { area.innerHTML = errorStateHtml(err.message); });
 }
 
 function galleryTile(f, idx, canDelete, showContext) {
   return (
     '<figure class="gallery-tile" data-file-id="' + escapeHtml(f.fileId) + '" data-idx="' + idx + '">' +
+    (canDelete ? '<label class="gallery-tile__select" title="Select"><input type="checkbox" data-select-id="' + escapeHtml(f.fileId) + '"></label>' : '') +
     '  <div class="gallery-tile__thumb-wrap">' + icon('image', 'gallery-tile__placeholder') + '</div>' +
     '  <div class="gallery-tile__hover"><span class="gallery-tile__hover-btn">' + icon('search') + ' Quick View</span></div>' +
     '  <figcaption>' +
@@ -955,6 +947,7 @@ function galleryTile(f, idx, canDelete, showContext) {
 function docRow(f, idx, canDelete, showContext) {
   return (
     '<div class="doc-row" data-file-id="' + escapeHtml(f.fileId) + '">' +
+    (canDelete ? '<label class="doc-row__select" title="Select"><input type="checkbox" data-select-id="' + escapeHtml(f.fileId) + '"></label>' : '') +
     icon('doc', 'doc-row__icon') +
     '  <div class="doc-row__info"><strong>' + escapeHtml(f.fileName) + '</strong>' +
     (showContext
@@ -1011,7 +1004,7 @@ function wireGalleryLazyThumbs() {
 function wireQuickViewClicks(area, allFiles) {
   area.querySelectorAll('.gallery-tile').forEach(function (tile) {
     tile.addEventListener('click', function (e) {
-      if (e.target.closest('.gallery-tile__delete')) return;
+      if (e.target.closest('.gallery-tile__delete') || e.target.closest('.gallery-tile__select')) return;
       openQuickView(allFiles, Number(tile.getAttribute('data-idx')));
     });
   });
@@ -1030,6 +1023,166 @@ function wireDeleteButtons(area, onDeleted) {
         .catch(function (err) { Toast.error(err.message); });
     });
   });
+}
+
+/**
+ * গ্যালারি/ডকুমেন্ট লিস্টের HTML + সব ইন্টার‍্যাকশন (lazy thumbnail, quick view,
+ * single delete, download, checkbox bulk-select+bulk-delete) — Project category
+ * page, Quick Search, এবং Advanced Search — এই তিন জায়গাতেই হুবহু একই ফাইল-লিস্ট
+ * UI লাগে, তাই markup + wiring দুটোই একটাই জায়গায় রাখা হলো (duplicate কোড এড়াতে)।
+ */
+function fileResultsHtml(files, canDelete, showContext) {
+  var images = files.filter(function (f) { return f.isImage; });
+  var docs = files.filter(function (f) { return !f.isImage; });
+  var bulkBar = (canDelete && files.length)
+    ? '<div class="bulk-bar" id="bulk-bar">' +
+      '  <label class="bulk-bar__all"><input type="checkbox" id="bulk-select-all"><span>Select All</span></label>' +
+      '  <span class="bulk-bar__count" id="bulk-count">0 selected</span>' +
+      '  <button type="button" class="btn btn--danger btn--sm" id="bulk-delete-btn" disabled>' + icon('trash') + ' <span id="bulk-delete-label">Delete Selected (0)</span></button>' +
+      '</div>'
+    : '';
+  return bulkBar +
+    (images.length ? '<div class="gallery-grid">' + images.map(function (f) { return galleryTile(f, files.indexOf(f), canDelete, showContext); }).join('') + '</div>' : '') +
+    (docs.length ? '<div class="doc-list">' + docs.map(function (f) { return docRow(f, files.indexOf(f), canDelete, showContext); }).join('') + '</div>' : '');
+}
+
+function wireFileResults(container, files, canDelete, onRefresh) {
+  wireGalleryLazyThumbs();
+  wireQuickViewClicks(container, files);
+  wireDeleteButtons(container, onRefresh);
+  wireDownloadButtons(container);
+  if (canDelete) wireBulkSelection(container, files, onRefresh);
+}
+
+/**
+ * Checkbox-ভিত্তিক multi-select + bulk delete। সব selected fileId একটাই batched
+ * `bulkDeleteFiles` কলে পাঠানো হয় (N-টা আলাদা deleteFile কল সিরিয়ালি/সমান্তরালে
+ * না ছুঁড়ে) — backend প্রতিটার জন্য আলাদা status ফেরত দেয়, এবং সফলভাবে ডিলিট
+ * হওয়া টাইলগুলো সরাসরি DOM থেকে সরানো হয় (পুরো লিস্ট আবার fetch করার দরকার নেই)।
+ */
+function wireBulkSelection(container, files, onAllDeleted) {
+  var bar = container.querySelector('#bulk-bar');
+  if (!bar) return;
+  var selectAllCb = bar.querySelector('#bulk-select-all');
+  var countEl = bar.querySelector('#bulk-count');
+  var deleteBtn = bar.querySelector('#bulk-delete-btn');
+  var deleteLabel = bar.querySelector('#bulk-delete-label');
+
+  function checkboxes() { return Array.prototype.slice.call(container.querySelectorAll('[data-select-id]')); }
+
+  function refresh() {
+    var boxes = checkboxes();
+    var n = boxes.filter(function (cb) { return cb.checked; }).length;
+    countEl.textContent = n + ' / ' + boxes.length + ' selected';
+    deleteBtn.disabled = n === 0;
+    deleteLabel.textContent = 'Delete Selected (' + n + ')';
+    selectAllCb.checked = boxes.length > 0 && n === boxes.length;
+    selectAllCb.indeterminate = n > 0 && n < boxes.length;
+  }
+  // runBulkDelete সফল হওয়ার পর DOM থেকে ডিলিট-হওয়া টাইল সরিয়ে দেওয়ার পর এই
+  // refresh()-টা আবার কল করা দরকার (counter/button ঠিক রাখতে) — কিন্তু পুরো
+  // wireBulkSelection() আবার কল করলে বেঁচে-থাকা checkbox-গুলোতে ডুপ্লিকেট
+  // listener লেগে যেত, তাই refresh()-কে bar element-এর সাথে রেখে দেওয়া হলো
+  // যাতে বাইরে থেকে (runBulkDelete) সরাসরি কল করা যায়।
+  bar._refreshBulkBar = refresh;
+
+  checkboxes().forEach(function (cb) { cb.addEventListener('change', refresh); });
+
+  selectAllCb.addEventListener('change', function () {
+    checkboxes().forEach(function (cb) { cb.checked = selectAllCb.checked; });
+    refresh();
+  });
+
+  deleteBtn.addEventListener('click', function () {
+    var ids = checkboxes().filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.getAttribute('data-select-id'); });
+    if (!ids.length) return;
+    var names = files.filter(function (f) { return ids.indexOf(f.fileId) !== -1; }).map(function (f) { return f.fileName; });
+    openBulkDeleteConfirm(ids, names, container, onAllDeleted);
+  });
+
+  refresh();
+}
+
+function openBulkDeleteConfirm(ids, names, container, onAllDeleted) {
+  var node = el(
+    '<div class="modal modal--sm">' +
+    '  <div class="modal__head"><h3>' + icon('trash') + ' Confirm Bulk Delete</h3><button class="icon-btn modal-close">' + icon('close') + '</button></div>' +
+    '  <div class="modal__body">' +
+    '    <p>আপনি <strong>' + ids.length + '</strong>টি ফাইল ডিলিট করতে যাচ্ছেন:</p>' +
+    '    <ul class="bulk-delete-list">' +
+    names.slice(0, 15).map(function (n) { return '<li>' + escapeHtml(n) + '</li>'; }).join('') +
+    (names.length > 15 ? '<li class="muted">+' + (names.length - 15) + ' more</li>' : '') +
+    '    </ul>' +
+    '    <p class="muted small">This action cannot be undone.</p>' +
+    '    <div class="btn-row">' +
+    '      <button type="button" class="btn btn--ghost btn--block modal-close">Cancel</button>' +
+    '      <button type="button" class="btn btn--danger btn--block" id="confirm-bulk-delete">Delete ' + ids.length + ' Files</button>' +
+    '    </div>' +
+    '  </div>' +
+    '</div>'
+  );
+  Modal.open(node);
+  node.querySelector('#confirm-bulk-delete').addEventListener('click', function () {
+    var btn = node.querySelector('#confirm-bulk-delete');
+    btn.disabled = true;
+    btn.textContent = 'ডিলিট হচ্ছে...';
+    runBulkDelete(ids, container, onAllDeleted);
+  });
+}
+
+function runBulkDelete(ids, container, onAllDeleted) {
+  var bar = container.querySelector('#bulk-bar');
+  var deleteBtn = bar && bar.querySelector('#bulk-delete-btn');
+  var deleteLabel = bar && bar.querySelector('#bulk-delete-label');
+  // এখানে ইচ্ছাকৃতভাবে deleteBtn.innerHTML পুরোটা বদলানো হয় না — তাহলে ভেতরের
+  // #bulk-delete-label span-টাই হারিয়ে যেত, আর wireBulkSelection()-এর refresh()
+  // closure যেই element-টা ধরে রেখেছে সেটা DOM থেকে বিচ্ছিন্ন (stale) হয়ে
+  // যেত — ফলে পরে selection বদলালেও বাটনের লেখা আর আসল selected-count-এর সাথে
+  // sync থাকত না। তাই শুধু label-এর টেক্সট বদলানো হয়, span/icon কাঠামো অক্ষত থাকে।
+  if (deleteBtn) deleteBtn.disabled = true;
+  if (deleteLabel) deleteLabel.textContent = 'Deleting ' + ids.length + ' file' + (ids.length === 1 ? '' : 's') + '...';
+
+  Api.post('bulkDeleteFiles', { fileIds: ids })
+    .then(function (res) {
+      Modal.close();
+      var results = res.results || [];
+
+      results.forEach(function (r) {
+        var tile = container.querySelector('[data-file-id="' + r.fileId + '"]');
+        if (!tile) return;
+        if (r.status === 'deleted') {
+          tile.remove();
+        } else {
+          // যেটা delete করা যায়নি সেটা list-এই থেকে যায় (যাতে অন্য কোনো valid
+          // selection হারিয়ে না যায়) — শুধু চোখে পড়ার মতো লাল বর্ডার দেওয়া হয়
+          // এবং checkbox uncheck করে দেওয়া হয়, কারণ এটা আসলে delete হয়নি।
+          tile.classList.add('tile-delete-failed');
+          var cb = tile.querySelector('[data-select-id]');
+          if (cb) cb.checked = false;
+        }
+      });
+
+      if (res.deleted > 0) refreshSearchIndex();
+
+      if (res.failed > 0) {
+        Toast.error('✅ ' + res.deleted + ' file(s) deleted. ❌ ' + res.failed + ' file(s) could not be deleted.');
+      } else {
+        Toast.success('✅ ' + res.deleted + ' file(s) deleted successfully.');
+      }
+
+      var remaining = container.querySelectorAll('[data-file-id]').length;
+      if (remaining === 0) {
+        container.innerHTML = emptyStateHtml('🔍 No Results Found', 'সব ফাইল ডিলিট হয়ে গেছে।');
+        if (onAllDeleted) onAllDeleted();
+      } else if (bar && bar._refreshBulkBar) {
+        bar._refreshBulkBar(); // checkbox অবস্থা থেকে counter + বাটনের লেখা/disabled ঠিকভাবে recompute করে
+      }
+    })
+    .catch(function (err) {
+      Toast.error(err.message);
+      if (bar && bar._refreshBulkBar) bar._refreshBulkBar();
+      else { if (deleteBtn) deleteBtn.disabled = false; if (deleteLabel) deleteLabel.textContent = 'Delete Selected (' + ids.length + ')'; }
+    });
 }
 
 function wireDownloadButtons(area) {
@@ -1182,17 +1335,10 @@ function runGlobalSearch(query) {
       html += '<h3 class="results-subhead">Projects (' + res.projects.length + ')</h3><div class="project-grid">' + res.projects.map(searchProjectCard).join('') + '</div>';
     }
     if (res.files.length) {
-      var images = res.files.filter(function (f) { return f.isImage; });
-      var docs = res.files.filter(function (f) { return !f.isImage; });
-      html += '<h3 class="results-subhead">Files (' + res.files.length + ')</h3>' +
-        (images.length ? '<div class="gallery-grid">' + images.map(function (f) { return galleryTile(f, res.files.indexOf(f), canDelete, true); }).join('') + '</div>' : '') +
-        (docs.length ? '<div class="doc-list">' + docs.map(function (f) { return docRow(f, res.files.indexOf(f), canDelete, true); }).join('') + '</div>' : '');
+      html += '<h3 class="results-subhead">Files (' + res.files.length + ')</h3>' + fileResultsHtml(res.files, canDelete, true);
     }
     box.innerHTML = html;
-    wireGalleryLazyThumbs();
-    wireQuickViewClicks(box, res.files);
-    wireDeleteButtons(box, function () { runGlobalSearch(query); });
-    wireDownloadButtons(box);
+    if (res.files.length) wireFileResults(box, res.files, canDelete, function () { runGlobalSearch(query); });
   }).catch(function (err) { box.innerHTML = errorStateHtml(err.message); });
 }
 
@@ -1283,15 +1429,8 @@ function runAdvancedSearch(filters) {
   Api.get('listFiles', filters).then(function (files) {
     if (!files.length) { box.innerHTML = emptyStateHtml('🔍 No Results Found', 'Try different filters, or Reset and start again.'); return; }
     var canDelete = Auth.isAdminOrModerator();
-    var images = files.filter(function (f) { return f.isImage; });
-    var docs = files.filter(function (f) { return !f.isImage; });
-    box.innerHTML = '<p class="muted">' + files.length + ' file(s) found</p>' +
-      (images.length ? '<div class="gallery-grid">' + images.map(function (f) { return galleryTile(f, files.indexOf(f), canDelete, true); }).join('') + '</div>' : '') +
-      (docs.length ? '<div class="doc-list">' + docs.map(function (f) { return docRow(f, files.indexOf(f), canDelete, true); }).join('') + '</div>' : '');
-    wireGalleryLazyThumbs();
-    wireQuickViewClicks(box, files);
-    wireDeleteButtons(box, function () { runAdvancedSearch(filters); });
-    wireDownloadButtons(box);
+    box.innerHTML = '<p class="muted">' + files.length + ' file(s) found</p>' + fileResultsHtml(files, canDelete, true);
+    wireFileResults(box, files, canDelete, function () { runAdvancedSearch(filters); });
   }).catch(function (err) { box.innerHTML = errorStateHtml(err.message); });
 }
 
